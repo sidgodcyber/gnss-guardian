@@ -42,6 +42,8 @@ One-shot demo: render a simulated walk with a ramp jam and recovery, then replay
 2026-10-22T14:02:53Z  jamming  -> CLEAR   0.00
 ```
 
+Every replay also writes `session/NAME/dashboard.json` for the offline replay viewer: `cd dashboard; npm ci; npm run dev`, then open http://127.0.0.1:3000 (see [dashboard/README.md](dashboard/README.md)).
+
 Live demo through the serial path (the simulator serves `socket://`, the Windows stand-in for `/dev/serial0`):
 ```powershell
 .venv\Scripts\python tools\fake_l86.py --transport tcp --walk loop:20:10:1.2 --spoof jump --spoof-at 120   # prints PORT socket://127.0.0.1:NNNN

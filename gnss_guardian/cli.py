@@ -3,7 +3,7 @@
     python -m gnss_guardian.cli live --l86 /dev/serial0 --out session/live [--rate 1|5|10]
                                      [--l86-constellations gps,glonass,galileo] [--home lat,lon]
                                      [--camera auto|picam|usb:N|video:FILE | --no-camera]
-    python -m gnss_guardian.cli replay FILE.nmea --out session/NAME [--speed 0] [--home lat,lon]
+    python -m gnss_guardian.cli replay FILE.nmea|FOLDER --out session/NAME [--speed 0] [--home lat,lon]
                                        [--video video.avi [--frames frames.csv | --video-start ISO]]
     python -m gnss_guardian.cli status --data session/live
     python -m gnss_guardian.cli calibrate --video walk/video.avi --distance 10 [--height 1.0] [--dry-run]
@@ -59,7 +59,7 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
 
 
 @cli.command()
-@click.argument("nmea_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("nmea_file", type=click.Path(exists=True))
 @click.option("--out", required=True, type=click.Path(file_okay=False))
 @click.option("--speed", default=0.0, show_default=True, type=float, help="0 = as fast as possible, N = N x real time.")
 @click.option("--home", default=None, help="Home point lat,lon (default: set after the first trusted fixes).")
@@ -70,10 +70,23 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
               help="Frame timestamps (default: frames.csv next to the video).")
 @click.option("--video-start", default=None, help="ISO UTC time of the first frame when there is no frames.csv.")
 def replay(nmea_file, out, speed, home, config_path, video, frames_csv, video_start):
-    """Run detection (and vision, with --video) over a recording and print the event timeline."""
+    """Run detection (and vision, with --video) over a recording and print the event timeline.
+
+    NMEA_FILE may be a recording folder: nmea.nmea or gnss.nmea, with video.avi or camera.avi and
+    frames.csv used as the video when present. Writes session/NAME/dashboard.json for the dashboard."""
     from datetime import datetime
+    from pathlib import Path
 
     from gnss_guardian.run import replay as run_replay
+    from gnss_guardian.run import resolve_recording
+    if Path(nmea_file).is_dir():
+        try:
+            nmea_file, found_video, found_frames = resolve_recording(nmea_file)
+        except FileNotFoundError as e:
+            raise click.BadParameter(str(e)) from e
+        if video is None and found_video is not None:
+            video, frames_csv = found_video, frames_csv or found_frames
+        click.echo(f"recording: {nmea_file}" + (f" + {video}" if video else ""))
     cfg = load_config(config_path)
     start = datetime.fromisoformat(video_start.replace("Z", "+00:00")) if video_start else None
     s = run_replay(nmea_file, cfg, out, speed=speed, home=_home(home), echo=click.echo, video=video,
@@ -83,7 +96,7 @@ def replay(nmea_file, out, speed, home, config_path, video, frames_csv, video_st
                f"{s['spoofing_suspect_epochs']} | first alarms {s['first_alarm'] or '-'}")
     if video:
         click.echo(f"vision: {s['frames']} frames, {s['keyframes']} keyframes")
-    click.echo(f"session: {out}")
+    click.echo(f"session: {out} (dashboard: {s['dashboard']})")
 
 
 @cli.command()

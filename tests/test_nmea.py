@@ -14,6 +14,8 @@ def test_checksum_and_capture_formats():
     assert fmt == "iso_prefix" and sent == s and host.microsecond == 412000 and host.tzinfo is not None
     fmt, host, _ = nm.split_prefix(f"1792500000.5 {s}")
     assert fmt == "epoch_prefix" and host.timestamp() == 1792500000.5
+    fmt, host, sent = nm.split_prefix(f"8123.456,1792500000.25,{s}")
+    assert fmt == "mono_unix_prefix" and sent == s and host.timestamp() == 1792500000.25
     assert nm.split_prefix("garbage")[0] is None
     assert nm.sentence_type(s) == "GGA" and nm.sentence_type(nmea("PMTK001,220,3")) == "PMTK001"
 

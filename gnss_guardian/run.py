@@ -170,11 +170,21 @@ def replay(path: str | Path, cfg: dict, out: str | Path, speed: float = 0.0,
     if nav is not None:
         s["frames"] = n_frames
         s["keyframes"] = len(nav.map.keyframes)
-
-    # Export dashboard data for replay viewer
     from gnss_guardian.dashboard_export import write_dashboard_json
-    dashboard_path = write_dashboard_json(out)
-    if echo:
-        echo(f"dashboard: {dashboard_path}")
-
+    s["dashboard"] = str(write_dashboard_json(out, cfg, video=video, frames_csv=frames_csv, video_start=video_start))
     return s
+
+
+RECORDING_NMEA = ("nmea.nmea", "gnss.nmea")      # tools/record_session.py, standalone Pi recorders
+RECORDING_VIDEO = ("video.avi", "camera.avi")
+
+
+def resolve_recording(folder: str | Path) -> tuple[Path, Path | None, Path | None]:
+    """(nmea, video, frames.csv) inside a recording folder; video and frames are None when absent."""
+    folder = Path(folder)
+    nmea = next((folder / n for n in RECORDING_NMEA if (folder / n).is_file()), None)
+    if nmea is None:
+        raise FileNotFoundError(f"{folder}: no {' or '.join(RECORDING_NMEA)}")
+    video = next((folder / n for n in RECORDING_VIDEO if (folder / n).is_file()), None)
+    frames = folder / "frames.csv"
+    return nmea, video, frames if frames.is_file() else None

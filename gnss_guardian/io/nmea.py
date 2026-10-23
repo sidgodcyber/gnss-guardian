@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 
 ISO_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)Z?[,\s]+(\$.*)$")
 EPOCH_PREFIX = re.compile(r"^(\d{9,11}(?:\.\d+)?)[,\s]+(\$.*)$")
+MONO_UNIX_PREFIX = re.compile(r"^\d+(?:\.\d+)?,(\d{9,11}(?:\.\d+)?),(\$.*)$")   # Pi recorders: t_mono,t_unix,$NMEA
 NMEA = re.compile(r"^\$([A-Z0-9]{2,})(,.*)?\*([0-9A-Fa-f]{2})$")
 KNOT = 0.514444
 PGTOP_ANTENNA = {"1": "SHORT", "2": "INTERNAL", "3": "OK"}    # MTK: 1 active antenna shorted, 2 internal, 3 active
@@ -47,6 +48,8 @@ def split_prefix(raw_line: str) -> tuple[str | None, datetime | None, str]:
         return "iso_prefix", t, m.group(2)
     if (m := EPOCH_PREFIX.match(line)):
         return "epoch_prefix", datetime.fromtimestamp(float(m.group(1)), tz=timezone.utc), m.group(2)
+    if (m := MONO_UNIX_PREFIX.match(line)):
+        return "mono_unix_prefix", datetime.fromtimestamp(float(m.group(1)), tz=timezone.utc), m.group(2)
     return None, None, line
 
 

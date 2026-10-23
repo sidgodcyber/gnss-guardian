@@ -71,8 +71,16 @@ class PiCamera:
 
 
 def read_frames_csv(path: Path) -> list[float]:
+    """Host UTC seconds per frame: column host_utc (ISO, tools/record_session.py) or t_unix (seconds,
+    the standalone Pi recorders)."""
     with open(path, encoding="ascii") as f:
-        return [datetime.fromisoformat(r["host_utc"].replace("Z", "+00:00")).timestamp() for r in csv.DictReader(f)]
+        rows = csv.DictReader(f)
+        cols = rows.fieldnames or []
+        if "host_utc" in cols:
+            return [datetime.fromisoformat(r["host_utc"].replace("Z", "+00:00")).timestamp() for r in rows]
+        if "t_unix" in cols:
+            return [float(r["t_unix"]) for r in rows]
+    raise ValueError(f"{path}: needs a host_utc or t_unix column (found {', '.join(cols) or 'none'})")
 
 
 class CvCamera:

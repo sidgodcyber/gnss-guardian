@@ -1,141 +1,101 @@
-"""Dashboard export: verify session data is properly exported for the replay viewer."""
+"""dashboard.json written by replay: state transitions in order, no coordinates, Pi recorder folders."""
 import json
-from pathlib import Path
 
-from conftest import sim_file
-from gnss_guardian.dashboard_export import export_dashboard
-from gnss_guardian.run import replay
+import pytest
+from conftest import fast_vision_cfg, sim_file
 
-
-def test_dashboard_export_from_clean_replay(tmp_path, cfg):
-    """Run replay on a clean synthetic walk, verify dashboard.json is created with expected structure."""
-    nmea_path = sim_file(tmp_path / "clean.nmea", duration_s=60)
-    session_path = tmp_path / "session"
-
-    # Run replay
-    result = replay(nmea_path, cfg, session_path)
-    assert result["epochs"] == 60
-
-    # Check dashboard.json exists
-    dashboard_path = session_path / "dashboard.json"
-    assert dashboard_path.exists(), f"dashboard.json not created at {dashboard_path}"
-
-    # Load and verify structure
-    data = json.loads(dashboard_path.read_text())
-    assert "meta" in data
-    assert "timeline" in data
-    assert "summary" in data
-
-    # Check metadata
-    assert data["meta"]["mode"] == "replay"
-    assert data["meta"]["source"] == str(nmea_path)
-
-    # Check timeline
-    timeline = data["timeline"]
-    assert len(timeline) > 0, "timeline should not be empty"
-    assert len(timeline) <= 60, "timeline should have at most 1 entry per second"
-
-    # Verify each timeline entry has required fields
-    for entry in timeline:
-        assert "t_gnss" in entry
-        assert "gnss" in entry
-        assert "jamming_level" in entry
-        assert "spoofing_level" in entry
-        assert "vision" in entry
-        assert "transitions" in entry
-
-        # Check GNSS data
-        gnss = entry["gnss"]
-        assert "fix_valid" in gnss
-        assert "sats_used" in gnss
-        assert "hdop" in gnss
-        assert "cn0_mean" in gnss
-
-        # Check vision data
-        vision = entry["vision"]
-        assert "heading" in vision or vision["e"] is None
-        assert "keyframes" in vision
-
-        # Check detector levels are valid
-        assert entry["jamming_level"] in ("CLEAR", "SUSPECT", "ALARM")
-        assert entry["spoofing_level"] in ("CLEAR", "SUSPECT", "ALARM")
-
-    # Check summary
-    summary = data["summary"]
-    assert "start_time" in summary
-    assert "end_time" in summary
-    assert "duration_s" in summary
-    assert summary["duration_s"] > 0
+from gnss_guardian.io.nmea import split_prefix
+from gnss_guardian.run import replay, resolve_recording
+from gnss_guardian.vision.camera import read_frames_csv
 
 
-def test_dashboard_export_preserves_state_transitions(tmp_path, cfg):
-    """Export should capture state transitions (level changes) in the timeline."""
-    # Create synthetic data with a spoof event
-    nmea_path = sim_file(tmp_path / "spoof.nmea",
-                         "--spoof", "jump",
-                         "--spoof-at", "50",
-                         duration_s=120)
-    session_path = tmp_path / "session_spoof"
-
-    # Run replay
-    replay(nmea_path, cfg, session_path)
-
-    # Check dashboard.json
-    data = json.loads((session_path / "dashboard.json").read_text())
-    timeline = data["timeline"]
-
-    # Find transitions in timeline
-    transitions_found = []
-    for entry in timeline:
-        if entry["transitions"]:
-            transitions_found.extend(entry["transitions"])
-
-    # Verify transitions are properly formatted if they exist
-    for trans in transitions_found:
-        assert "detector" in trans
-        assert "level" in trans
-        assert "score" in trans
-        assert trans["detector"] in ("jamming", "spoofing")
-        assert trans["level"] in ("CLEAR", "SUSPECT", "ALARM")
-        assert isinstance(trans["score"], float)
+def run(tmp_path, cfg, name, *args, duration_s=300):
+    nmea = sim_file(tmp_path / f"{name}.nmea", *args, duration_s=duration_s)
+    replay(nmea, cfg, tmp_path / name)
+    return json.loads((tmp_path / name / "dashboard.json").read_text(encoding="utf-8"))
 
 
-def test_dashboard_export_with_vision_data(tmp_path, cfg):
-    """Export with vision video should include ENU coordinates in timeline."""
-    from conftest import synth_walk, SYNTH_STILL_S, SYNTH_DURATION_S, SYNTH_FPS
+def states(d):
+    return [t["state"] for t in d["transitions"]]
 
-    # Generate synthetic walk with vision
-    synth_path = tmp_path / "vision_walk"
-    synth_walk.main([str(synth_path),
-                     "--walk", "loop:15:10:1.0",
-                     "--still-s", str(SYNTH_STILL_S),
-                     "--duration-s", str(SYNTH_DURATION_S),
-                     "--fps", str(SYNTH_FPS),
-                     "--nmea"])
 
-    session_path = tmp_path / "session_vision"
+def assert_no_coordinates(d):
+    text = json.dumps(d)
+    for key in ('"lat"', '"lon"', '"alt_m"', '"latitude"', '"longitude"'):
+        assert key not in text
+    assert "29.25" not in text and "79.53" not in text          # simulator home latitude / longitude
 
-    # Run replay with video
-    result = replay(synth_path / "nmea.nmea", cfg, session_path,
-                    video=synth_path / "video.avi",
-                    frames_csv=synth_path / "frames.csv")
 
-    # Check replay completed
-    assert result["frames"] > 0, "should have processed video frames"
+def test_jam_demo_transitions(tmp_path, cfg):
+    d = run(tmp_path, cfg, "jam", "--jam", "ramp", "--jam-at", "120", "--recover-after", "40")
+    assert states(d) == [None, "GNSS_OK", "SUSPECT", "JAMMED", "SUSPECT", "GNSS_OK"]
+    t = [x["t"] for x in d["transitions"]]
+    assert t == sorted(t)
+    jammed = d["transitions"][3]
+    assert 120 <= jammed["t"] <= 126 and "jamming.drop_frac" in jammed["indicators"]
+    assert [(x["detector"], x["level"]) for x in d["detector_levels"]] == [
+        ("jamming", "SUSPECT"), ("jamming", "ALARM"), ("jamming", "SUSPECT"), ("jamming", "CLEAR")]
+    assert len(d["timeline"]) == 300 and d["meta"]["video"] is None
+    assert any(r["gnss"]["e"] is not None for r in d["timeline"])        # local metres once home is set
+    assert_no_coordinates(d)
 
-    # Check dashboard.json exists and is valid
-    data = json.loads((session_path / "dashboard.json").read_text())
-    timeline = data["timeline"]
 
-    # Verify all entries have valid vision structure
-    for entry in timeline:
-        vision = entry["vision"]
-        assert "e" in vision
-        assert "n" in vision
-        assert "heading" in vision
-        assert "keyframes" in vision
-        # e and n can be None if home is not set
-        if vision["e"] is not None:
-            assert isinstance(vision["e"], (int, float))
-        if vision["n"] is not None:
-            assert isinstance(vision["n"], (int, float))
+def test_spoof_demo_transitions(tmp_path, cfg):
+    d = run(tmp_path, cfg, "spoof", "--spoof", "jump", "--spoof-at", "120")
+    assert states(d) == [None, "GNSS_OK", "SPOOFED"]                     # latched to the end of the file
+    spoofed = d["transitions"][2]
+    assert 118 <= spoofed["t"] <= 123 and "spoofing.speed" in spoofed["indicators"]
+    assert all(i.startswith("spoofing.") for i in spoofed["indicators"])  # only detectors above CLEAR
+    keys = {i["key"] for i in d["config"]["spoofing"]["indicators"]}
+    assert keys == {"speed", "time", "altitude", "uniform_cn0", "newcomers", "vision"}
+    assert d["config"]["hysteresis"]["alarm_on"] == cfg["detect"]["hysteresis"]["alarm_on"]
+    assert_no_coordinates(d)
+
+
+def test_vision_session_exports_video_and_track(tmp_path, cfg, synth_session):
+    out = tmp_path / "synth"
+    nmea, video, frames = resolve_recording(synth_session)
+    replay(nmea, fast_vision_cfg(cfg), out, video=video, frames_csv=frames)
+    d = json.loads((out / "dashboard.json").read_text(encoding="utf-8"))
+    assert (out / "dashboard_video.webm").stat().st_size > 0
+    assert d["meta"]["video"] == "dashboard_video.webm" and d["meta"]["video_fps"] > 0
+    frames_idx = [r["frame"] for r in d["timeline"] if r["frame"] is not None]
+    assert frames_idx == sorted(frames_idx) and len(frames_idx) > 0.9 * len(d["timeline"])
+    assert any(r["vision"] and r["vision"]["e"] is not None for r in d["timeline"])
+    assert d["keyframes"] and states(d)[:2] == [None, "GNSS_OK"]
+    assert_no_coordinates(d)
+
+
+def test_pi_recorder_folder_replays_like_record_session(tmp_path, cfg):
+    """gnss.nmea with t_mono,t_unix,$NMEA lines gives the same verdicts as the ISO-prefixed file."""
+    src = sim_file(tmp_path / "ref.nmea", "--jam", "ramp", "--jam-at", "120", "--recover-after", "40", duration_s=200)
+    pi = tmp_path / "pi_walk"
+    pi.mkdir()
+    lines = []
+    for i, line in enumerate(src.read_text(encoding="ascii").splitlines()):
+        _, host, sentence = split_prefix(line)
+        lines.append(f"{1000 + i * 0.01:.3f},{host.timestamp():.3f},{sentence}")
+    (pi / "gnss.nmea").write_text("\n".join(lines) + "\n", encoding="ascii")
+    nmea, video, frames = resolve_recording(pi)
+    assert nmea.name == "gnss.nmea" and video is None and frames is None
+    a = replay(src, cfg, tmp_path / "s_ref")
+    b = replay(nmea, cfg, tmp_path / "s_pi")
+    assert a["epochs"] == b["epochs"] == 200
+    da, db = (json.loads((tmp_path / s / "dashboard.json").read_text(encoding="utf-8")) for s in ("s_ref", "s_pi"))
+    assert states(da) == states(db) == [None, "GNSS_OK", "SUSPECT", "JAMMED", "SUSPECT", "GNSS_OK"]
+
+
+def test_recording_folder_files_and_frames_csv(tmp_path):
+    for name in ("gnss.nmea", "camera.avi"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "frames.csv").write_text("idx,t_mono,t_unix\n0,10.0,1792677600.5\n1,10.05,1792677600.55\n")
+    nmea, video, frames = resolve_recording(tmp_path)
+    assert (nmea.name, video.name, frames.name) == ("gnss.nmea", "camera.avi", "frames.csv")
+    assert read_frames_csv(frames) == [1792677600.5, 1792677600.55]
+    (tmp_path / "frames.csv").write_text("idx,host_utc\n0,2026-10-22T14:00:00.500Z\n")
+    assert read_frames_csv(frames) == [1792677600.5]
+    (tmp_path / "frames.csv").write_text("idx,t_mono\n0,10.0\n")
+    with pytest.raises(ValueError, match="host_utc or t_unix"):
+        read_frames_csv(frames)
+    with pytest.raises(FileNotFoundError):
+        resolve_recording(tmp_path / "missing")

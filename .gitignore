@@ -13,6 +13,14 @@ dist/
 /synth/
 /*.nmea
 /*.avi
-/demo/
-/sim_*.nmea
-agriiiii\ \(2\).zip
+# Teammate dashboard archive and its raw extraction (the kept source lives in dashboard/).
+/*.zip
+/agriiiii*/
+# Real recordings (record_session.py, standalone Pi recorders) and dashboard exports, at any depth.
+recordings/
+**/gnss.nmea
+**/camera.avi
+**/video.avi
+**/frames.csv
+*.webm
+.env
