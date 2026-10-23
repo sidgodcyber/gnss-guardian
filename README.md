@@ -5,9 +5,8 @@ trustworthy (jamming, blockage or spoofing). It is built so a drone can switch t
 navigation and get back home. Hackathon problem #143 (Open Innovation). The tested payload is a
 handheld pole rig, not a flying drone.
 
-**Runtime inputs are on-board only:** Quectel L86-M33 (GNSS, UART), Pi Camera Rev 1.3 (vision, Phase 2),
-and an optional MPU6050 on I2C (auto-detected, off by default). No phone, no network: the module keeps
-working with Wi-Fi off, and the dashboard (Phase 4) only views its output. A phone GnssLogger recording is
+**Runtime inputs are on-board only:** Quectel L86-M33 (GNSS, UART), Pi Camera Rev 1.3 (vision, Phase 2).
+No phone, no network: the module keeps working with Wi-Fi off, and the dashboard (Phase 4) only views its output. A phone GnssLogger recording is
 an offline reference only ("reference, not used for navigation"), compared after a field test (Phase 4).
 
 | Phase | Scope | Status |
@@ -16,7 +15,7 @@ an offline reference only ("reference, not used for navigation"), compared after
 | 2 | Vision odometry (optical flow, ORB keyframe terrain map), calibration, camera ↔ GNSS cross-check | **done** (synthetic ground only; real Pi camera walks pending) |
 | 3 | State machine, fused position, return home | next |
 | 4 | Dashboard, AI second opinion, phone comparison, demo scripts | |
-| 5 | Pi 4 setup script (camera, UART `dtoverlay=disable-bt`, I2C), systemd, field test kit | manual steps below |
+| 5 | Pi 4 setup script (camera, UART `dtoverlay=disable-bt`), systemd, field test kit | manual steps below |
 
 Forked in spirit from IonWatch. The NMEA parser, serial live loop, PMTK rate setup and serial simulator
 were copied and extended; no git history was carried over.
@@ -173,7 +172,7 @@ home is confirmed when the home keyframe matches within 1.5 m. Thumbnails go to
   and motion blur. Expect several times the rendered drift until the Pi camera walks are recorded and
   measured. Vision thresholds (velocity cross-check, quality) are tuned on synthetic walks only.
 - **Flat ground at a fixed height is assumed.** Height comes from the config; tilting the pole biases the
-  scale. A gimbal or the optional IMU would help.
+  scale. A gimbal would help.
 - **Low texture** (smooth concrete, water, darkness) stops the vision track (`vision_lost`) rather than
   guessing. Daylight and a short exposure are needed against motion blur.
 

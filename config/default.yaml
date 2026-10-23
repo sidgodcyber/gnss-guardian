@@ -1,15 +1,12 @@
 # gnss-guardian default configuration. Every detection threshold lives here.
 # Times are UTC; display_tz is used only for the status line.
-# Runtime inputs are on-board only: L86 (GNSS), Pi Camera (vision, Phase 2), optional MPU6050.
+# Runtime inputs are on-board only: L86 (GNSS), Pi Camera (vision, Phase 2).
 
 node_id: guardian-01
 display_tz: Asia/Kolkata
 
 rig:
   max_speed_mps: 3.0             # handheld pole rig; a real drone profile would raise this
-
-imu:
-  enabled: false                 # optional MPU6050 on I2C; auto-detected only when enabled (not used yet)
 
 camera:                          # Pi Camera Rev 1.3 (OV5647), pointing straight down
   source: auto                   # auto (Picamera2, else usb:0) | picam | usb:N | video:PATH
