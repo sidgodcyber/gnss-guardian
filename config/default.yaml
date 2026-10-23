@@ -1,0 +1,86 @@
+# gnss-guardian default configuration. Every detection threshold lives here.
+# Times are UTC; display_tz is used only for the status line.
+# Runtime inputs are on-board only: L86 (GNSS), Pi Camera (vision, Phase 2), optional MPU6050.
+
+node_id: guardian-01
+display_tz: Asia/Kolkata
+
+rig:
+  max_speed_mps: 3.0             # handheld pole rig; a real drone profile would raise this
+
+imu:
+  enabled: false                 # optional MPU6050 on I2C; auto-detected only when enabled (Phase 2)
+
+home:
+  set_after_s: 30                # home = median of the first N s of trusted fixes after warm-up (unless --home)
+
+l86:
+  talkers:                       # NMEA talker -> constellation
+    GP: GPS
+    GL: GLONASS
+    GA: Galileo
+    GB: BeiDou
+    BD: BeiDou
+    GQ: QZSS
+    PQ: QZSS
+    GI: NavIC
+  galileo_check_s: 15            # after PMTK353, GAGSV must appear within this many data seconds
+
+live:
+  reconnect_s: 2                 # serial retry interval after unplug / open failure
+  silence_reopen_s: 10           # no bytes for this long (wall s): event no_serial_data and reopen the port
+  no_data_s: 3                   # no epoch for this long: verdict "no_data" (GNSS not trusted, not a jam)
+  read_timeout_s: 0.2            # an empty read this long ends the NMEA burst: the epoch is emitted at once
+  rate_measure_s: 30             # after a 5/10 Hz setup, measure the real epoch rate over this many seconds
+
+detect:
+  baseline:
+    window_s: 60                 # rolling per-satellite C/N0 median over clean epochs only
+    min_samples: 20              # a satellite needs this many baseline samples before it counts
+    warmup_s: 60                 # no verdicts beyond "warming_up" until this much clean data
+    min_base_cn0_dbhz: 25        # satellites weaker than this in the baseline are too noisy to judge drops
+    min_base_sats: 4             # fewer judged satellites: jamming score not computed (reason given)
+    time_offset_samples: 30      # GNSS-minus-monotonic offset baseline (median of the last N clean epochs)
+  elev_mask_deg: 5               # C/N0 mean/std use satellites at or above this elevation
+
+  jamming:                       # "GNSS denied: jamming or blockage" (no AGC on the L86: RF jamming,
+                                 #  foil, buildings and canopy look the same)
+    drop_db: 6                   # a satellite has "dropped" when C/N0 <= baseline - drop_db (or is lost)
+    lost_cn0_dbhz: 10            # C/N0 assumed for a lost satellite when averaging the drop
+    drop_frac: [0.25, 0.6]       # ramp: fraction of judged satellites dropped -> 0..1
+    mean_drop_db: [3, 10]        # ramp: mean C/N0 drop over judged satellites
+    lost_frac: [0.2, 0.6]        # ramp: fraction of judged satellites no longer tracked
+    hdop_ratio: [1.5, 3.0]       # ramp: HDOP / baseline HDOP
+    weights: {drop_frac: 0.45, mean_drop: 0.25, lost_frac: 0.15, hdop: 0.05, fix_lost: 0.10}
+    fix_lost_with_drop: 0.5      # fix lost while at least this fraction dropped: score >= 0.9
+    sky_change_min_tracked: 3    # if at least this many judged satellites are still tracked ...
+    sky_change_scale: 0.4        # ... and their median drop is < drop_db / 2, scale the score by this
+                                 # (satellites lost but the rest unchanged: a wall, or a spoofer's new sky)
+
+  spoofing:                      # noisy-OR: any one strong indicator can raise the alarm alone
+    jump_slack_m: 8              # position noise allowance before an implied speed counts
+    speed_ramp_x: [1.0, 2.0]     # ramp on speed / rig.max_speed_mps (implied or reported)
+    alt_rate_mps: [10, 30]       # ramp on |d altitude| / dt
+    time_jump_s: [0.8, 2.0]      # ramp on |GNSS-minus-monotonic offset - baseline|
+    uniform_std_db: [3.0, 1.5]   # ramp: C/N0 std across satellites falling from 3.0 to 1.5 dB ...
+    uniform_mean_dbhz: [40, 45]  # ... while the mean C/N0 is high
+    uniform_min_sats: 5
+    newcomer_frac: [0.25, 0.6]   # ramp: tracked satellites not seen in the baseline window
+    newcomer_min_sats: 4
+    vision_window_s: 3           # GNSS-minus-vision velocity averaged over this window (Phase 2 hook)
+    vision_diff_mps: [0.4, 1.0]  # ramp on |mean velocity difference|; set from synthetic data only so far
+    vision_min_quality: 0.5
+    vision_max_age_s: 1.5
+    weights: {speed: 0.95, time: 0.95, altitude: 0.7, uniform_cn0: 0.55, newcomers: 0.5, vision: 0.8}
+    gate_kinematic_when_jammed: true   # a degraded fix under jamming jumps around: not attributed to spoofing
+
+  hysteresis:                    # per detector: CLEAR -> SUSPECT -> ALARM
+    suspect_on: 0.35
+    suspect_off: 0.2
+    suspect_hold_s: 3            # score below suspect_off this long: SUSPECT -> CLEAR
+    alarm_on: 0.6
+    alarm_k: 2                   # consecutive epochs >= alarm_on ...
+    alarm_immediate: 0.8         # ... or a single epoch >= this
+    alarm_off: 0.3
+    alarm_hold_s: 5              # score below alarm_off this long: ALARM -> SUSPECT
+    min_alarm_s: {jamming: 0, spoofing: 30}   # a spoof stays latched; Phase 3 releases it on vision agreement

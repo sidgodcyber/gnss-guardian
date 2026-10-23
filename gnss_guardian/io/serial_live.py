@@ -1,0 +1,281 @@
+"""Live L86 over serial: read NMEA, emit an epoch the moment each burst ends, run detection.
+
+Reused from IonWatch live mode: reconnect after unplug/open failure, reopen after a silent port
+(a GPIO UART does not error when the L86 loses power, it goes quiet: event no_serial_data),
+partial-line and garbage handling, raw NMEA log with host-time prefix, and the PMTK rate setup
+(PMTK251 baud, PMTK314 sentences, PMTK220 fix interval, measured rate with fallback to 1 Hz).
+New: PMTK353 to enable Galileo (verified by GAGSV appearing), epoch-level output, no_data events.
+
+    gnss-guardian live --l86 /dev/serial0 [--rate 1|5|10] [--l86-constellations gps,glonass,galileo]
+                       --out session/NAME [--home lat,lon]
+
+Time: mono = time.monotonic() x clock_scale (clock_scale > 1 only to pair with a fast simulator).
+No network is used: the port is a device or the pyserial URL the user passes.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from gnss_guardian.run import Pipeline
+from gnss_guardian.session import SessionWriter
+
+log = logging.getLogger("gnss_guardian.live")
+
+# PMTK314 field order: GLL, RMC, VTG, GGA, GSA, GSV, GRS, GST, (10 reserved), ZDA, MCHN.
+PMTK314_RMC_GGA_GSA_GSV = "PMTK314,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0"
+HIGH_BAUD = 115200
+CONSTELLATIONS = ("gps", "glonass", "galileo", "galileo_full", "beidou")
+
+
+def pmtk(body: str) -> bytes:
+    x = 0
+    for ch in body:
+        x ^= ord(ch)
+    return f"${body}*{x:02X}\r\n".encode("ascii")
+
+
+def pmtk353(names: list[str]) -> str:
+    """PMTK353,GPS,GLONASS,GALILEO,GALILEO_FULL,BEIDOU from names like ['gps','glonass','galileo']."""
+    bad = set(names) - set(CONSTELLATIONS)
+    if bad:
+        raise ValueError(f"unknown constellations {sorted(bad)}; use {', '.join(CONSTELLATIONS)}")
+    return "PMTK353," + ",".join("1" if c in names else "0" for c in CONSTELLATIONS)
+
+
+def setup_logging(out_dir: Path, name: str) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger("gnss_guardian")
+    root.setLevel(logging.INFO)
+    for h in list(root.handlers):
+        if getattr(h, "_guardian", False):
+            root.removeHandler(h)
+            h.close()
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    for h in (logging.FileHandler(out_dir / name, encoding="utf-8"), logging.StreamHandler()):
+        h.setFormatter(fmt)
+        h._guardian = True
+        root.addHandler(h)
+
+
+class RawNmeaLog:
+    """Raw NMEA with a host-time prefix, one file per host UTC day: raw/nmea_YYYY-MM-DD.nmea
+    (the format `gnss-guardian replay` and tools/record_nmea.py use)."""
+
+    def __init__(self, folder: Path):
+        self.folder = Path(folder)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self._day, self._f = None, None
+
+    def write(self, line: str, host: datetime) -> None:
+        if not line:
+            return
+        day = f"{host:%Y-%m-%d}"
+        if day != self._day:
+            self.close()
+            self._day = day
+            self._f = open(self.folder / f"nmea_{day}.nmea", "a", encoding="ascii", errors="replace")
+        self._f.write(f"{host:%Y-%m-%dT%H:%M:%S}.{host.microsecond // 1000:03d}Z,{line}\n")
+
+    def flush(self):
+        if self._f:
+            self._f.flush()
+
+    def close(self):
+        if self._f:
+            self._f.close()
+            self._f = None
+
+
+class L86RateSetup:
+    """Configure the L86 output rate (and constellations) on every (re)open; the module forgets its
+    settings when it loses power (no backup battery).
+
+    rate 1: leave the module at 9600 baud, 1 Hz. rate 5/10: PMTK251 (115200), reopen at 115200,
+    PMTK314 (RMC, GGA, GSA, GSV only) and PMTK220. The epoch rate is then measured over
+    ``measure_s`` data seconds; below 80 % of the request the module goes back to 1 Hz at the start
+    baud (event rate_fallback).
+    """
+
+    def __init__(self, rate: int, baud: int, measure_s: float = 30.0, constellations: str | None = None):
+        self.requested, self.baud, self.measure_s = rate, baud, measure_s
+        self.constellations = constellations
+        self.fallen_back = False
+        self.measured: float | None = None
+        self._epochs: set = set()
+        self._t0 = None
+
+    @property
+    def high(self) -> bool:
+        return self.requested > 1 and not self.fallen_back
+
+    def open(self, serial_mod, port: str, timeout: float):
+        ser = serial_mod.serial_for_url(port, baudrate=self.baud, timeout=timeout)
+        if self.high:
+            ser.write(pmtk(f"PMTK251,{HIGH_BAUD}"))
+            ser.flush()
+            time.sleep(0.1)
+            ser.close()
+            ser = serial_mod.serial_for_url(port, baudrate=HIGH_BAUD, timeout=timeout)
+            ser.write(pmtk(PMTK314_RMC_GGA_GSA_GSV))
+            ser.write(pmtk(f"PMTK220,{int(1000 / self.requested)}"))
+            self._epochs, self._t0, self.measured = set(), None, None     # re-measure after every open
+            log.info("L86 configured: %d baud, RMC/GGA/GSA/GSV only, %d Hz requested", HIGH_BAUD, self.requested)
+        elif self.fallen_back:                           # module may have kept 5/10 Hz settings
+            ser.write(pmtk("PMTK220,1000"))
+        if self.constellations:
+            ser.write(pmtk(self.constellations))
+            log.info("L86 constellations: %s", self.constellations)
+        ser.flush()
+        return ser
+
+    def observe(self, t_gnss) -> str | None:
+        """Feed each epoch's GNSS time; 'ok' or 'fallback' once the measurement window is complete."""
+        if not self.high or self.measured is not None or t_gnss is None:
+            return None
+        ts = t_gnss.timestamp()
+        if self._t0 is None:
+            self._t0 = float(int(ts) + 1)                # start on a whole second
+        if ts >= self._t0:
+            self._epochs.add(round(ts, 2))
+        if ts - self._t0 >= self.measure_s:
+            self.measured = round(len(self._epochs) / (ts - self._t0), 2)
+            return "fallback" if self.measured < 0.8 * self.requested else "ok"
+        return None
+
+    def fallback(self, ser, serial_mod, port: str, timeout: float):
+        log.warning("L86 epoch rate %.2f Hz < 80 %% of the requested %d Hz: back to 1 Hz at %d baud",
+                    self.measured, self.requested, self.baud)
+        ser.write(pmtk("PMTK220,1000"))
+        ser.write(pmtk(f"PMTK251,{self.baud}"))
+        ser.flush()
+        time.sleep(0.1)
+        ser.close()
+        self.fallen_back = True
+        return serial_mod.serial_for_url(port, baudrate=self.baud, timeout=timeout)
+
+
+def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellations: list[str] | None = None,
+             clock_scale: float = 1.0, duration_s: float | None = None, home=None, echo=print) -> dict:
+    """Read NMEA from ``port`` (/dev/serial0, COM3, or a pyserial URL such as socket://127.0.0.1:5000)
+    until stopped or ``duration_s`` wall seconds. Returns the pipeline summary."""
+    import serial
+
+    out_dir = Path(out_dir)
+    setup_logging(out_dir, "live.log")
+    lv = cfg["live"]
+    cmd353 = pmtk353(constellations) if constellations else None
+    writer = SessionWriter(out_dir, {"mode": "live", "port": port, "baud": baud, "node_id": cfg["node_id"],
+                                     "rate_requested": rate, "constellations": cmd353}, append=True)
+    pipe = Pipeline(cfg, writer, home, echo=lambda s: log.info(s))
+    raw = RawNmeaLog(out_dir / "raw")
+    setup = L86RateSetup(rate, baud, lv["rate_measure_s"], cmd353)
+    want_galileo = bool(constellations) and "galileo" in constellations
+    galileo_t0, galileo_done, n_acks = None, False, 0
+    ser, pending, connected_once, down_since = None, b"", False, None
+    last_bytes = last_epoch = time.monotonic()
+    no_data_flagged = False
+    t0 = time.monotonic()
+    log.info("live: port %s @ %d baud, rate %d Hz, out %s", port, baud, rate, out_dir)
+
+    def mono():
+        return time.monotonic() * clock_scale
+
+    def handle(verdicts):
+        nonlocal last_epoch, no_data_flagged, galileo_t0, galileo_done, ser, pending
+        for v in verdicts:
+            last_epoch = time.monotonic()
+            if no_data_flagged:
+                writer.event("data_resumed", t_gnss=v["t_gnss"])
+                no_data_flagged = False
+            ep_t = pipe.builder.parser.cur_time
+            verdict = setup.observe(ep_t)
+            if verdict:
+                writer.event("rate_measured", measured_hz=setup.measured, requested_hz=setup.requested)
+            if verdict == "fallback":
+                writer.event("rate_fallback", measured_hz=setup.measured)
+                ser = setup.fallback(ser, serial, port, lv["read_timeout_s"])
+                pending = b""
+            if want_galileo and not galileo_done and ep_t is not None:
+                galileo_t0 = galileo_t0 or ep_t.timestamp()
+                if "GA" in pipe.builder.parser.gsv_talkers:
+                    writer.event("galileo_confirmed", t_gnss=v["t_gnss"])
+                    log.info("Galileo confirmed: GAGSV received")
+                    galileo_done = True
+                elif ep_t.timestamp() - galileo_t0 > cfg["l86"]["galileo_check_s"]:
+                    writer.event("galileo_missing", t_gnss=v["t_gnss"])
+                    log.warning("PMTK353 sent but no GAGSV after %s s: module firmware may not support Galileo",
+                                cfg["l86"]["galileo_check_s"])
+                    galileo_done = True
+
+    try:
+        while duration_s is None or time.monotonic() - t0 < duration_s:
+            if ser is None:
+                try:
+                    ser = setup.open(serial, port, lv["read_timeout_s"])
+                    log.info("serial %s open%s", port, " (reconnected)" if connected_once else "")
+                    writer.event("serial_open", port=port, reconnect=connected_once)
+                    connected_once, down_since, pending, last_bytes = True, None, b"", time.monotonic()
+                    galileo_t0 = None
+                except (serial.SerialException, OSError, ValueError) as e:
+                    if down_since is None:
+                        log.warning("serial %s unavailable: %s; retrying every %.1f s", port, e, lv["reconnect_s"])
+                        writer.event("serial_unavailable", port=port, error=str(e))
+                        down_since = time.monotonic()
+                    time.sleep(lv["reconnect_s"])
+                    continue
+            if time.monotonic() - last_bytes > lv["silence_reopen_s"]:
+                log.warning("no bytes from %s for %.0f s (L86 unplugged or not powered?); reopening",
+                            port, time.monotonic() - last_bytes)
+                writer.event("no_serial_data", port=port, silent_s=round(time.monotonic() - last_bytes, 1))
+                ser.close()
+                ser, last_bytes = None, time.monotonic()
+                continue
+            try:
+                chunk = ser.read(ser.in_waiting or 1)     # return as soon as bytes arrive: each line stamped on arrival
+            except (serial.SerialException, OSError) as e:
+                log.warning("serial %s lost: %s", port, e)
+                writer.event("serial_lost", port=port, error=str(e))
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                ser, down_since, pending = None, time.monotonic(), b""
+                handle(pipe.flush())
+                continue
+            host = datetime.now(timezone.utc)
+            if chunk:
+                last_bytes = time.monotonic()
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                if len(pending) > 1024:                 # no newline for 1 kB: garbage
+                    pending = b""
+                m = mono()
+                for bl in lines:
+                    line = bl.decode("ascii", errors="replace").strip()
+                    raw.write(line, host)
+                    handle(pipe.feed(line, host, m))
+                raw.flush()
+            else:
+                handle(pipe.flush())                    # the burst is over: emit the epoch now
+            if len(pipe.builder.parser.acks) > n_acks:
+                for cmd, flag in pipe.builder.parser.acks[n_acks:]:
+                    status = {"3": "ok", "2": "failed", "1": "unsupported", "0": "invalid"}.get(flag, flag)
+                    log.info("L86 ack PMTK%s: %s", cmd, status)
+                    writer.event("pmtk_ack", command=cmd, status=status)
+                n_acks = len(pipe.builder.parser.acks)
+            if not no_data_flagged and (time.monotonic() - last_epoch) * clock_scale > lv["no_data_s"]:
+                writer.event("no_data", since_s=round((time.monotonic() - last_epoch) * clock_scale, 1))
+                no_data_flagged = True
+    except KeyboardInterrupt:
+        log.info("stopped by user")
+    finally:
+        if ser is not None:
+            ser.close()
+        handle(pipe.flush())
+        writer.close()
+        raw.close()
+        log.info("live stopped: %s", pipe.summary())
+    return pipe.summary()

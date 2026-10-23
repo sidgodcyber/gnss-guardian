@@ -1,0 +1,12 @@
+# Sessions (live, replay) and scratch recordings stay local; test fixtures live in tests/fixtures/.
+session/
+data/
+*.nmea.tmp
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
