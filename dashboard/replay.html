@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GNSS Guardian - Replay Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e0e6ed;
+            padding: 16px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #1e2736;
+        }
+
+        .title {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .mode-badge {
+            display: inline-block;
+            background: #1e3a5f;
+            color: #60a5fa;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-left: 12px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        input[type="file"] {
+            padding: 8px;
+            border-radius: 6px;
+            background: #1e2736;
+            border: 1px solid #3a4a5c;
+            color: #e0e6ed;
+            cursor: pointer;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        button:disabled {
+            background: #374151;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 12px;
+            background: #1e2736;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #9ca3af;
+            margin: 12px 0;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin: 24px 0;
+        }
+
+        .card {
+            background: #1a2332;
+            border: 1px solid #3a4a5c;
+            border-radius: 8px;
+            padding: 16px;
+        }
+
+        .card-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #9ca3af;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .card-value {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .card-unit {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .alert {
+            padding: 12px;
+            border-radius: 6px;
+            margin: 8px 0;
+        }
+
+        .alert-clear {
+            background: #064e3b;
+            color: #6ee7b7;
+            border: 1px solid #10b981;
+        }
+
+        .alert-suspect {
+            background: #7c2d12;
+            color: #fb923c;
+            border: 1px solid #f97316;
+        }
+
+        .alert-alarm {
+            background: #7f1d1d;
+            color: #fca5a5;
+            border: 1px solid #ef4444;
+        }
+
+        .timeline-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .play-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            min-width: 200px;
+            cursor: pointer;
+        }
+
+        .time-display {
+            font-size: 13px;
+            color: #9ca3af;
+            min-width: 100px;
+        }
+
+        .speed-selector {
+            padding: 6px 12px;
+            background: #1e2736;
+            border: 1px solid #3a4a5c;
+            color: #e0e6ed;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+
+        .map-container {
+            background: #111827;
+            border: 1px solid #3a4a5c;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 20px 0;
+            min-height: 400px;
+        }
+
+        svg.map {
+            width: 100%;
+            height: 400px;
+        }
+
+        .transitions-list {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #1a2332;
+            border: 1px solid #3a4a5c;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 20px 0;
+        }
+
+        .transition-item {
+            padding: 8px;
+            border-left: 3px solid #3a4a5c;
+            margin: 4px 0;
+            font-size: 13px;
+        }
+
+        .transition-item.jamming {
+            border-left-color: #f97316;
+        }
+
+        .transition-item.spoofing {
+            border-left-color: #8b5cf6;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid #3a4a5c;
+            margin: 24px 0 0 0;
+        }
+
+        .tab-button {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .tab-button.active {
+            color: #2563eb;
+            border-bottom-color: #2563eb;
+            background: none;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 20px 0;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .error {
+            background: #7f1d1d;
+            color: #fca5a5;
+            border: 1px solid #ef4444;
+            padding: 12px;
+            border-radius: 6px;
+            margin: 12px 0;
+        }
+
+        @media (prefers-color-scheme: light) {
+            body {
+                background: #f9fafb;
+                color: #1f2937;
+            }
+            .header {
+                border-bottom-color: #e5e7eb;
+            }
+            .card {
+                background: #fff;
+                border-color: #e5e7eb;
+            }
+            input[type="file"],
+            input[type="range"],
+            .speed-selector {
+                background: #f3f4f6;
+                border-color: #d1d5db;
+                color: #1f2937;
+            }
+            button {
+                background: #3b82f6;
+            }
+            button:hover {
+                background: #2563eb;
+            }
+            .status,
+            .transitions-list {
+                background: #f3f4f6;
+                border-color: #d1d5db;
+                color: #4b5563;
+            }
+            .map-container {
+                background: #fff;
+                border-color: #e5e7eb;
+            }
+            .tabs {
+                border-bottom-color: #e5e7eb;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1 class="title">GNSS Guardian <span class="mode-badge">Replay Mode</span></h1>
+            </div>
+            <div class="controls">
+                <input type="file" id="sessionFolder" webkitdirectory directory mozdirectory />
+                <button onclick="loadSessionFolder()">Load Session</button>
+            </div>
+        </div>
+
+        <div id="status" class="status" style="display:none;"></div>
+        <div id="error" class="error" style="display:none;"></div>
+
+        <div id="content" style="display:none;">
+            <div class="grid">
+                <div class="card">
+                    <div class="card-title">GNSS Status</div>
+                    <div class="card-value" id="gnss-status">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Jamming Detection</div>
+                    <div class="card-value" id="jamming-level">-</div>
+                    <div class="card-unit" id="jamming-score"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Spoofing Detection</div>
+                    <div class="card-value" id="spoofing-level">-</div>
+                    <div class="card-unit" id="spoofing-score"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Vision Track</div>
+                    <div class="card-value" id="vision-pos">-</div>
+                    <div class="card-unit" id="vision-heading"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">HDOP</div>
+                    <div class="card-value" id="hdop">-</div>
+                    <div class="card-unit">metres</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Satellites</div>
+                    <div class="card-value" id="sats">-</div>
+                    <div class="card-unit">used</div>
+                </div>
+            </div>
+
+            <div class="timeline-controls">
+                <div class="play-controls">
+                    <button id="playBtn" onclick="togglePlay()">▶ Play</button>
+                    <button onclick="rewind()">⏮</button>
+                </div>
+                <input type="range" id="timeline" min="0" max="100" value="0" onchange="seekTimeline()">
+                <div class="time-display" id="timeDisplay">0:00 / 0:00</div>
+                <select class="speed-selector" id="speedSelect" onchange="updateSpeed()">
+                    <option value="0.5">0.5×</option>
+                    <option value="1" selected>1×</option>
+                    <option value="2">2×</option>
+                </select>
+            </div>
+
+            <div class="tabs">
+                <button class="tab-button active" onclick="switchTab('overview')">Overview</button>
+                <button class="tab-button" onclick="switchTab('map')">Tactical Map</button>
+                <button class="tab-button" onclick="switchTab('gnss')">GNSS</button>
+                <button class="tab-button" onclick="switchTab('detections')">Detections</button>
+            </div>
+
+            <div id="overview" class="tab-content active">
+                <div class="chart-container">
+                    <canvas id="detectionChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="signalChart"></canvas>
+                </div>
+            </div>
+
+            <div id="map" class="tab-content">
+                <div class="map-container">
+                    <svg class="map" id="tacticalMap"></svg>
+                </div>
+            </div>
+
+            <div id="gnss" class="tab-content">
+                <div class="chart-container">
+                    <canvas id="hdopChart"></canvas>
+                </div>
+            </div>
+
+            <div id="detections" class="tab-content">
+                <div class="transitions-list" id="transitionsList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let data = null;
+        let currentIndex = 0;
+        let isPlaying = false;
+        let animationFrame = null;
+        let lastFrameTime = 0;
+        let speed = 1;
+        let charts = {};
+
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        function showStatus(msg) {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        async function loadSessionFolder() {
+            const input = document.getElementById('sessionFolder');
+            if (!input.files.length) {
+                showError('No folder selected');
+                return;
+            }
+
+            try {
+                let dashboardFile = null;
+                for (const file of input.files) {
+                    if (file.name === 'dashboard.json') {
+                        dashboardFile = file;
+                        break;
+                    }
+                }
+
+                if (!dashboardFile) {
+                    showError('dashboard.json not found in session folder. Run: gnss-guardian replay <nmea> --out session/<name> [--video video.avi]');
+                    return;
+                }
+
+                const text = await dashboardFile.text();
+                data = JSON.parse(text);
+
+                showStatus(`Loaded session: ${data.meta.source || 'unknown'} (${data.timeline.length} epochs)`);
+                currentIndex = 0;
+
+                document.getElementById('content').style.display = 'block';
+                document.getElementById('error').style.display = 'none';
+
+                initCharts();
+                updateDisplay();
+            } catch (e) {
+                showError('Error loading session: ' + e.message);
+            }
+        }
+
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return `${m}:${String(s).padStart(2, '0')}`;
+        }
+
+        function updateDisplay() {
+            if (!data || !data.timeline.length) return;
+
+            const ep = data.timeline[currentIndex];
+
+            // Update status cards
+            document.getElementById('gnss-status').textContent = ep.gnss.fix_valid ? '✓ Valid' : '✗ Invalid';
+            document.getElementById('jamming-level').textContent = ep.jamming_level;
+            document.getElementById('jamming-score').textContent = `Score: ${ep.jamming_score.toFixed(2)}`;
+            document.getElementById('spoofing-level').textContent = ep.spoofing_level;
+            document.getElementById('spoofing-score').textContent = `Score: ${ep.spoofing_score.toFixed(2)}`;
+            document.getElementById('hdop').textContent = ep.gnss.hdop ? ep.gnss.hdop.toFixed(1) : '-';
+            document.getElementById('sats').textContent = ep.gnss.sats_used || 0;
+
+            if (ep.vision.e !== null && ep.vision.n !== null) {
+                const dist = Math.sqrt(ep.vision.e ** 2 + ep.vision.n ** 2);
+                document.getElementById('vision-pos').textContent = `${dist.toFixed(1)}m`;
+                document.getElementById('vision-heading').textContent = `Heading: ${ep.vision.heading || 0}°`;
+            } else {
+                document.getElementById('vision-pos').textContent = '-';
+                document.getElementById('vision-heading').textContent = '';
+            }
+
+            // Update alert levels
+            const jamLevel = document.getElementById('jamming-level');
+            const spoofLevel = document.getElementById('spoofing-level');
+            jamLevel.className = 'card-value alert-' + ep.jamming_level.toLowerCase();
+            spoofLevel.className = 'card-value alert-' + ep.spoofing_level.toLowerCase();
+
+            // Update timeline
+            const maxTime = data.timeline.length;
+            document.getElementById('timeline').max = maxTime - 1;
+            document.getElementById('timeline').value = currentIndex;
+            document.getElementById('timeDisplay').textContent = `${formatTime(currentIndex)} / ${formatTime(maxTime - 1)}`;
+
+            // Update map
+            updateTacticalMap();
+
+            // Update transitions
+            updateTransitionsList();
+
+            // Update charts
+            updateCharts();
+        }
+
+        function updateTacticalMap() {
+            const svg = document.getElementById('tacticalMap');
+            svg.innerHTML = '';
+
+            // Draw grid
+            const width = svg.clientWidth || 600;
+            const height = 400;
+            const scale = 50; // pixels per 5m
+            const gridSize = 5;
+
+            // Background
+            const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            bg.setAttribute('width', width);
+            bg.setAttribute('height', height);
+            bg.setAttribute('fill', '#111827');
+            svg.appendChild(bg);
+
+            // Grid
+            for (let x = 0; x < width; x += gridSize * scale) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x);
+                line.setAttribute('y1', 0);
+                line.setAttribute('x2', x);
+                line.setAttribute('y2', height);
+                line.setAttribute('stroke', '#3a4a5c');
+                line.setAttribute('stroke-width', 1);
+                svg.appendChild(line);
+            }
+            for (let y = 0; y < height; y += gridSize * scale) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', 0);
+                line.setAttribute('y1', y);
+                line.setAttribute('x2', width);
+                line.setAttribute('y2', y);
+                line.setAttribute('stroke', '#3a4a5c');
+                line.setAttribute('stroke-width', 1);
+                svg.appendChild(line);
+            }
+
+            // Home point
+            const home = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            home.setAttribute('cx', width / 2);
+            home.setAttribute('cy', height / 2);
+            home.setAttribute('r', 6);
+            home.setAttribute('fill', '#10b981');
+            svg.appendChild(home);
+
+            // Plot GNSS track (green)
+            const gnssPath = [];
+            const spoofPath = [];
+            for (let i = 0; i <= currentIndex; i++) {
+                const ep = data.timeline[i];
+                if (ep.gnss.lat && ep.gnss.lon) {
+                    const x = width / 2 + (ep.gnss.lon - data.timeline[0].gnss.lon) * 111000 * scale;
+                    const y = height / 2 - (ep.gnss.lat - data.timeline[0].gnss.lat) * 110000 * scale;
+                    if (ep.spoofing_level === 'ALARM') {
+                        spoofPath.push([x, y]);
+                    } else {
+                        gnssPath.push([x, y]);
+                    }
+                }
+            }
+
+            // Draw GNSS path
+            if (gnssPath.length > 1) {
+                let pathStr = `M ${gnssPath[0][0]} ${gnssPath[0][1]}`;
+                for (let i = 1; i < gnssPath.length; i++) {
+                    pathStr += ` L ${gnssPath[i][0]} ${gnssPath[i][1]}`;
+                }
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', pathStr);
+                path.setAttribute('stroke', '#10b981');
+                path.setAttribute('stroke-width', 2);
+                path.setAttribute('fill', 'none');
+                svg.appendChild(path);
+            }
+
+            // Draw spoofing path
+            if (spoofPath.length > 1) {
+                let pathStr = `M ${spoofPath[0][0]} ${spoofPath[0][1]}`;
+                for (let i = 1; i < spoofPath.length; i++) {
+                    pathStr += ` L ${spoofPath[i][0]} ${spoofPath[i][1]}`;
+                }
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', pathStr);
+                path.setAttribute('stroke', '#8b5cf6');
+                path.setAttribute('stroke-width', 2);
+                path.setAttribute('fill', 'none');
+                svg.appendChild(path);
+            }
+
+            // Current position
+            const ep = data.timeline[currentIndex];
+            if (ep.gnss.lat && ep.gnss.lon) {
+                const x = width / 2 + (ep.gnss.lon - data.timeline[0].gnss.lon) * 111000 * scale;
+                const y = height / 2 - (ep.gnss.lat - data.timeline[0].gnss.lat) * 110000 * scale;
+                const current = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                current.setAttribute('cx', x);
+                current.setAttribute('cy', y);
+                current.setAttribute('r', 4);
+                current.setAttribute('fill', '#60a5fa');
+                svg.appendChild(current);
+            }
+
+            // Vision track if available
+            if (ep.vision.e !== null && ep.vision.n !== null) {
+                const vx = width / 2 + ep.vision.e * scale;
+                const vy = height / 2 - ep.vision.n * scale;
+                const vision = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                vision.setAttribute('cx', vx);
+                vision.setAttribute('cy', vy);
+                vision.setAttribute('r', 3);
+                vision.setAttribute('fill', '#3b82f6');
+                svg.appendChild(vision);
+            }
+        }
+
+        function updateTransitionsList() {
+            const list = document.getElementById('transitionsList');
+            list.innerHTML = '';
+
+            for (let i = Math.max(0, currentIndex - 10); i <= currentIndex; i++) {
+                const ep = data.timeline[i];
+                if (ep.transitions.length) {
+                    for (const tr of ep.transitions) {
+                        const item = document.createElement('div');
+                        item.className = `transition-item ${tr.detector}`;
+                        item.innerHTML = `<strong>${ep.t_gnss}</strong> ${tr.detector} → ${tr.level} (${tr.score.toFixed(2)})<br><small>${tr.reasons.join('; ')}</small>`;
+                        list.appendChild(item);
+                    }
+                }
+            }
+        }
+
+        function initCharts() {
+            const ctx1 = document.getElementById('detectionChart').getContext('2d');
+            const ctx2 = document.getElementById('signalChart').getContext('2d');
+            const ctx3 = document.getElementById('hdopChart').getContext('2d');
+
+            charts.detection = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: data.timeline.map(ep => ep.t_gnss.split('T')[1].slice(0, 5)),
+                    datasets: [
+                        {
+                            label: 'Jamming Score',
+                            data: data.timeline.map(ep => ep.jamming_score),
+                            borderColor: '#f97316',
+                            backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                            tension: 0.3,
+                        },
+                        {
+                            label: 'Spoofing Score',
+                            data: data.timeline.map(ep => ep.spoofing_score),
+                            borderColor: '#8b5cf6',
+                            backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                            tension: 0.3,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#9ca3af' } } },
+                    scales: {
+                        y: { beginAtZero: true, max: 1, ticks: { color: '#9ca3af' }, grid: { color: '#3a4a5c' } },
+                        x: { ticks: { color: '#9ca3af' }, grid: { color: '#3a4a5c' } }
+                    }
+                }
+            });
+
+            charts.signal = new Chart(ctx2, {
+                type: 'line',
+                data: {
+                    labels: data.timeline.map(ep => ep.t_gnss.split('T')[1].slice(0, 5)),
+                    datasets: [
+                        {
+                            label: 'Mean C/N0 (dB-Hz)',
+                            data: data.timeline.map(ep => ep.gnss.cn0_mean),
+                            borderColor: '#60a5fa',
+                            backgroundColor: 'rgba(96, 165, 250, 0.1)',
+                            tension: 0.3,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#9ca3af' } } },
+                    scales: {
+                        y: { beginAtZero: true, max: 50, ticks: { color: '#9ca3af' }, grid: { color: '#3a4a5c' } },
+                        x: { ticks: { color: '#9ca3af' }, grid: { color: '#3a4a5c' } }
+                    }
+                }
+            });
+
+            charts.hdop = new Chart(ctx3, {
+                type: 'line',
+                data: {
+                    labels: data.timeline.map(ep => ep.t_gnss.split('T')[1].slice(0, 5)),
+                    datasets: [
+                        {
+                            label: 'HDOP',
+                            data: data.timeline.map(ep => ep.gnss.hdop || 0),
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            tension: 0.3,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: '#9ca3af' } } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: '#9ca3af' }, grid: { color: '#3a4a5c' } },
+                        x: { ticks: { color: '#9ca3af' }, grid: { color: '#3a4a5c' } }
+                    }
+                }
+            });
+        }
+
+        function updateCharts() {
+            if (charts.detection) {
+                charts.detection.data.labels = data.timeline.slice(0, currentIndex + 1).map(ep => ep.t_gnss.split('T')[1].slice(0, 5));
+                charts.detection.data.datasets[0].data = data.timeline.slice(0, currentIndex + 1).map(ep => ep.jamming_score);
+                charts.detection.data.datasets[1].data = data.timeline.slice(0, currentIndex + 1).map(ep => ep.spoofing_score);
+                charts.detection.update('none');
+            }
+            if (charts.signal) {
+                charts.signal.data.labels = data.timeline.slice(0, currentIndex + 1).map(ep => ep.t_gnss.split('T')[1].slice(0, 5));
+                charts.signal.data.datasets[0].data = data.timeline.slice(0, currentIndex + 1).map(ep => ep.gnss.cn0_mean);
+                charts.signal.update('none');
+            }
+            if (charts.hdop) {
+                charts.hdop.data.labels = data.timeline.slice(0, currentIndex + 1).map(ep => ep.t_gnss.split('T')[1].slice(0, 5));
+                charts.hdop.data.datasets[0].data = data.timeline.slice(0, currentIndex + 1).map(ep => ep.gnss.hdop || 0);
+                charts.hdop.update('none');
+            }
+        }
+
+        function togglePlay() {
+            if (!data) return;
+            isPlaying = !isPlaying;
+            document.getElementById('playBtn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+            if (isPlaying) animate();
+        }
+
+        function animate() {
+            const now = performance.now();
+            if (!lastFrameTime) lastFrameTime = now;
+
+            const deltaMs = now - lastFrameTime;
+            lastFrameTime = now;
+
+            currentIndex += (deltaMs / 1000) * speed;
+            if (currentIndex >= data.timeline.length - 1) {
+                currentIndex = data.timeline.length - 1;
+                isPlaying = false;
+                document.getElementById('playBtn').textContent = '▶ Play';
+                lastFrameTime = 0;
+                return;
+            }
+
+            currentIndex = Math.floor(currentIndex);
+            updateDisplay();
+            if (isPlaying) animationFrame = requestAnimationFrame(animate);
+        }
+
+        function seekTimeline() {
+            const val = parseInt(document.getElementById('timeline').value);
+            currentIndex = Math.min(val, data.timeline.length - 1);
+            lastFrameTime = 0;
+            updateDisplay();
+        }
+
+        function rewind() {
+            currentIndex = 0;
+            isPlaying = false;
+            document.getElementById('playBtn').textContent = '▶ Play';
+            lastFrameTime = 0;
+            updateDisplay();
+        }
+
+        function updateSpeed() {
+            speed = parseFloat(document.getElementById('speedSelect').value);
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-button').forEach(el => el.classList.remove('active'));
+            document.getElementById(tab).classList.add('active');
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>

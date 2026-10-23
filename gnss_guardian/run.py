@@ -170,4 +170,11 @@ def replay(path: str | Path, cfg: dict, out: str | Path, speed: float = 0.0,
     if nav is not None:
         s["frames"] = n_frames
         s["keyframes"] = len(nav.map.keyframes)
+
+    # Export dashboard data for replay viewer
+    from gnss_guardian.dashboard_export import write_dashboard_json
+    dashboard_path = write_dashboard_json(out)
+    if echo:
+        echo(f"dashboard: {dashboard_path}")
+
     return s

@@ -1,0 +1,6 @@
+{
+  "name": "AeroShield AG - GPS Anti-Jam & Optical Flow Telemetry",
+  "description": "Agricultural drone edge autonomy dashboard with instant GNSS jamming and spoofing detection, visual terrain odometry failover, and autonomous return-to-base.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
