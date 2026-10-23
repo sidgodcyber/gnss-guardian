@@ -1,6 +1,6 @@
 # gnss-guardian
 
-A Raspberry Pi edge module that notices, within a few seconds, when satellite navigation stops being
+A Raspberry Pi 4 edge module that notices, within a few seconds, when satellite navigation stops being
 trustworthy (jamming, blockage or spoofing). It is built so a drone can switch to camera-based
 navigation and get back home. Hackathon problem #143 (Open Innovation). The tested payload is a
 handheld pole rig, not a flying drone.
@@ -16,7 +16,7 @@ an offline reference only ("reference, not used for navigation"), compared after
 | 2 | Vision odometry (optical flow, ORB keyframe terrain map), calibration, camera ↔ GNSS cross-check | **done** (synthetic ground only; real Pi camera walks pending) |
 | 3 | State machine, fused position, return home | next |
 | 4 | Dashboard, AI second opinion, phone comparison, demo scripts | |
-| 5 | Pi setup (camera, UART `dtparam=uart0=on`, I2C), systemd, field test kit | |
+| 5 | Pi 4 setup script (camera, UART `dtoverlay=disable-bt`, I2C), systemd, field test kit | manual steps below |
 
 Forked in spirit from IonWatch. The NMEA parser, serial live loop, PMTK rate setup and serial simulator
 were copied and extended; no git history was carried over.
@@ -50,7 +50,7 @@ Live demo through the serial path (the simulator serves `socket://`, the Windows
 .venv\Scripts\python -m gnss_guardian.cli live --l86 socket://127.0.0.1:NNNN --out session\live
 .venv\Scripts\python -m gnss_guardian.cli status --data session\live
 ```
-On the Pi: `gnss-guardian live --l86 /dev/serial0 --out session/live [--camera picam] [--rate 5] [--l86-constellations gps,glonass,galileo] [--home lat,lon]`.
+On the Pi 4 (after [Raspberry Pi 4 setup](#raspberry-pi-4-setup)): `gnss-guardian live --l86 /dev/serial0 --out session/live [--camera picam] [--rate 5] [--l86-constellations gps,glonass,galileo] [--home lat,lon]`.
 If the camera cannot be opened, live mode logs `camera_unavailable` and carries on GNSS-only.
 
 Vision demo: render a downward-camera walk over synthetic ground with matching NMEA, then replay both.
@@ -164,7 +164,7 @@ home is confirmed when the home keyframe matches within 1.5 m. Thumbnails go to
 | Calibration from a 10 m walk (true focal 635 px, start 700 px) | fitted 634.8 px |
 | Vision vs GNSS position while trusted | median 0.09 m, max 0.66 m (corners) |
 | Frame rate, this laptop (i5-8365U), 640×480 | odometry 68–130 fps all cores, 48–57 fps one core; with ORB matching 55–84 fps |
-| Frame rate, Pi 5 | **not measured**; expected ~25–50 fps at 640×480 and ~50–75 fps at `process_scale: 0.5`, from CPU benchmark ratios (~0.4–0.6× this laptop). Run `gnss-guardian vision-bench` on the Pi. |
+| Frame rate, Pi 4 | **not measured** until `gnss-guardian vision-bench` runs on the Pi 4 (no estimate is quoted; try `--scale 0.5` too). |
 
 ## Limits (read before quoting results)
 
@@ -197,9 +197,35 @@ home is confirmed when the home keyframe matches within 1.5 m. Thumbnails go to
 - Real RF jamming or spoofing transmitters are illegal to operate in India; all tests use shielding (foil)
   or simulation.
 
+## Raspberry Pi 4 setup
+
+The module runs on a Raspberry Pi 4 (64-bit Raspberry Pi OS Bookworm). Wiring is the same 40-pin header
+as any Pi: L86 VCC → pin 1 (3.3 V), GND → pin 6, L86 TX → pin 10 (GPIO15, RXD), L86 RX → pin 8 (GPIO14,
+TXD).
+
+1. **UART.** On the Pi 4 the full UART (`ttyAMA0`) drives Bluetooth, and `serial0` points at the mini UART
+   (`ttyS0`), whose baud rate follows the core clock. Give the full UART to the GPIO pins:
+   `sudo raspi-config` → Interface Options → Serial Port → login shell **No**, hardware **Yes**. Then add to
+   `/boot/firmware/config.txt` (`/boot/config.txt` on Bullseye):
+   ```
+   enable_uart=1
+   dtoverlay=disable-bt
+   ```
+   Run `sudo systemctl disable hciuart`, then reboot. `ls -l /dev/serial0` must show `-> ttyAMA0`, and
+   `timeout 10 cat /dev/serial0` must print NMEA.
+2. **Camera.** The Pi Camera Rev 1.3 connects with its standard 15-pin ribbon straight into the Pi 4's
+   CAMERA port (between HDMI and the audio jack): contacts toward the HDMI ports, latch closed. No adapter
+   cable is needed. `rpicam-hello --list-cameras` must list `ov5647`; if not, set `camera_auto_detect=0`
+   and `dtoverlay=ov5647` in `config.txt` and reseat the ribbon.
+3. **Software.** `sudo apt install -y python3-picamera2 python3-opencv`, then
+   `python3 -m venv --system-site-packages .venv` (so Picamera2 is visible) and `pip install -e .`.
+4. **Frame rate.** Run `gnss-guardian vision-bench` (and `--scale 0.5`) and record the result in the
+   Phase 2 table: the Pi 4 vision rate is unmeasured until then.
+5. **Power.** 5 V 3 A USB-C; `vcgencmd get_throttled` must read `0x0` with the camera and L86 running.
+
 ## Recording real data
 
-`tools/record_nmea.py` is standalone (pyserial only), so it can be copied to the Pi without the repo:
+`tools/record_nmea.py` is standalone (pyserial only), so it can be copied to the Pi 4 without the repo:
 ```bash
 python3 record_nmea.py --out real_l86_clean.nmea --duration-min 30    # in tmux; status line every 10 s
 ```

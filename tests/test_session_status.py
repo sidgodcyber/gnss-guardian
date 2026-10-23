@@ -43,4 +43,17 @@ def test_status_line_trusted_alarm_and_stale(tmp_path, cfg):
     os.utime(tmp_path / "jam" / "latest.json", (old, old))
     line, stale = status_line(tmp_path / "jam")
     assert stale and line.split(" | ")[1].startswith("STALE")
+    assert line.split(" | ")[2] == "GNSS UNKNOWN" and "GNSS denied" not in line and "last: fix lost" in line
     assert status_line(tmp_path / "nothing")[1]
+
+
+def test_status_line_stale_trusted_epoch_is_unknown(tmp_path, cfg):
+    src = sim_file(tmp_path / "s.nmea", walk=None, duration_s=75)
+    replay(src, cfg, tmp_path / "clean")
+    line, stale = status_line(tmp_path / "clean")
+    assert not stale and line.split(" | ")[1] == "GNSS TRUSTED" and "age " in line
+    old = time.time() - 6                                                  # just past STALE_S
+    os.utime(tmp_path / "clean" / "latest.json", (old, old))
+    line, stale = status_line(tmp_path / "clean")
+    assert stale and "TRUSTED" not in line and line.split(" | ")[2] == "GNSS UNKNOWN"
+    assert "last: fix " in line and "age " not in line

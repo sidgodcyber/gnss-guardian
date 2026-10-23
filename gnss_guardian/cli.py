@@ -26,6 +26,16 @@ def _home(value):
         raise click.BadParameter(str(e)) from e
 
 
+L86_RATES_HZ = (1, 5, 10)
+
+
+def _rate(ctx, param, value):
+    """--rate as a number (1, "1", 5.0): a string Choice rejected the int default on older Click."""
+    if value not in L86_RATES_HZ:
+        raise click.BadParameter(f"{value:g} Hz is not supported; use 1, 5 or 10")
+    return int(value)
+
+
 @click.group()
 def cli():
     """GNSS jamming/spoofing detection (Phase 1 of gnss-guardian)."""
@@ -35,7 +45,7 @@ def cli():
 @click.option("--l86", "port", required=True,
               help="Serial port (/dev/serial0, COM3) or pyserial URL (socket://127.0.0.1:5000).")
 @click.option("--baud", default=9600, show_default=True, type=int)
-@click.option("--rate", default=1, show_default=True, type=click.Choice(["1", "5", "10"]),
+@click.option("--rate", default=1, show_default=True, type=float, callback=_rate, metavar="1|5|10",
               help="L86 fix rate in Hz (5/10 switch the module to 115200 baud).")
 @click.option("--l86-constellations", default=None,
               help="Send PMTK353, e.g. gps,glonass,galileo (verified by GAGSV appearing).")
@@ -52,7 +62,7 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
     from gnss_guardian.io.serial_live import run_live
     cfg = load_config(config_path)
     names = [c.strip().lower() for c in l86_constellations.split(",")] if l86_constellations else None
-    s = run_live(port, baud, out, cfg, rate=int(rate), constellations=names, clock_scale=clock_scale,
+    s = run_live(port, baud, out, cfg, rate=rate, constellations=names, clock_scale=clock_scale,
                  duration_s=duration_s, home=_home(home),
                  camera=None if no_camera else (camera or cfg["camera"]["source"]))
     click.echo(f"epochs {s['epochs']}, first alarms {s['first_alarm'] or '-'}")
