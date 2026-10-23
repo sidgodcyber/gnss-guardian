@@ -13,8 +13,8 @@ an offline reference only ("reference, not used for navigation"), compared after
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Per-epoch GNSS health, jamming/spoofing scores with reasons and hysteresis, simulator profiles | **done** |
-| 2 | Vision odometry (optical flow, ORB keyframe map) | next |
-| 3 | State machine, fused position, return home | |
+| 2 | Vision odometry (optical flow, ORB keyframe terrain map), calibration, camera ↔ GNSS cross-check | **done** (synthetic ground only; real Pi camera walks pending) |
+| 3 | State machine, fused position, return home | next |
 | 4 | Dashboard, AI second opinion, phone comparison, demo scripts | |
 | 5 | Pi setup (camera, UART `dtparam=uart0=on`, I2C), systemd, field test kit | |
 
@@ -48,7 +48,16 @@ Live demo through the serial path (the simulator serves `socket://`, the Windows
 .venv\Scripts\python -m gnss_guardian.cli live --l86 socket://127.0.0.1:NNNN --out session\live
 .venv\Scripts\python -m gnss_guardian.cli status --data session\live
 ```
-On the Pi: `gnss-guardian live --l86 /dev/serial0 --out session/live [--rate 5] [--l86-constellations gps,glonass,galileo] [--home lat,lon]`.
+On the Pi: `gnss-guardian live --l86 /dev/serial0 --out session/live [--camera picam] [--rate 5] [--l86-constellations gps,glonass,galileo] [--home lat,lon]`.
+If the camera cannot be opened, live mode logs `camera_unavailable` and carries on GNSS-only.
+
+Vision demo: render a downward-camera walk over synthetic ground with matching NMEA, then replay both.
+A slow spoof (natural C/N0, invisible to GNSS-only checks) is caught by the camera:
+```powershell
+.venv\Scripts\python tools\synth_walk.py synth --walk loop:20:10:1.2 --still-s 40 --duration-s 120 --fps 20 --nmea --nmea-args "--spoof drift --spoof-cn0 natural --spoof-at 70 --drift-mps 0.5"
+.venv\Scripts\python -m gnss_guardian.cli replay synth\nmea.nmea --video synth\video.avi --out session\synth
+.venv\Scripts\python -m gnss_guardian.cli vision-bench                  # frame rate on this machine
+```
 
 ## What Phase 1 detects
 
@@ -74,7 +83,8 @@ blockage and the score is damped. A wall, or a spoofer's new sky, is not broadba
 - altitude rate
 - C/N0 suspiciously uniform and high across satellites
 - tracked satellites never seen in the baseline window
-- GNSS velocity disagreeing with camera velocity: the Phase 2 hook `DetectionEngine.observe_vision()`, mean over 3 s
+- GNSS velocity disagreeing with camera velocity (`DetectionEngine.observe_vision()`, fed by Phase 2):
+  mean difference over 3 s (fast drag-off) or 10 s (slow drag-off), with both velocities taken over the same interval
 
 Kinematic indicators are not blamed on spoofing while the fix is degraded by jamming.
 
@@ -97,7 +107,7 @@ not as jamming. All thresholds are in [config/default.yaml](config/default.yaml)
 | `--spoof jump` (500 m) | spoofing | 0 s |
 | `--spoof drift` (1 m/s, spoofer's uniform sky) | spoofing | 1 s |
 | `--spoof time` (+30 s) | spoofing | 0 s |
-| `--spoof drift --spoof-cn0 natural` | none from GNSS; spoofing via the vision hook | ≤ 5 s (synthetic vision, 0.2 m/s noise) |
+| `--spoof drift --spoof-cn0 natural` | none from GNSS alone; spoofing via the camera | 2.0 m/s: 2 s, 1.0 m/s: 3 s, 0.5 m/s: 9 s (rendered video) |
 
 False alarms (ALARM epochs):
 
@@ -109,7 +119,61 @@ False alarms (ALARM epochs):
 | Real L86 clean (30 min) | pending | test skips until `tests/fixtures/real_l86_clean.nmea` exists |
 | Real L86 foil wrap | pending | must reach JAMMED ≤ 3 s after the C/N0 collapse; skips until recorded |
 
+## What Phase 2 does (vision)
+
+The camera points straight down from the rig, about 1 m up. Per frame (640×480 grey):
+
+1. **Optical flow:** Shi–Tomasi corners and pyramidal Lucas–Kanade with a forward-backward check. LK
+   starts from a constant-velocity prediction.
+2. **Motion fit:** a RANSAC similarity fit gives rotation and translation. Pixels become metres via the
+   camera height and focal length (`camera.hfov_deg` = 53.5° for the OV5647, refined by `calibrate`).
+3. **Bad frames:** a failed frame (blur, a turn starting abruptly, a foot in view) does not lose its
+   motion. The flow keeps its reference frame for up to 5 frames, and an ORB match is tried if LK
+   still fails.
+4. **Quality:** inliers × inlier ratio × fit. Below 0.3 a frame is `low_texture`; a long stretch is
+   `vision_lost` and the track stops instead of inventing motion.
+
+**Heading** is the sum of image rotations. It is initialised from the GNSS course on the first 2 m of
+straight walking, then slowly corrected (τ = 20 s) on straight stretches while GNSS is trusted. This also
+learns how the camera is turned on the pole. Keyframe matches correct it during vision navigation. No
+IMU, no phone.
+
+**Position** is the GNSS fix from 3 s ago plus the camera displacement since then, while GNSS is trusted.
+A spoof caught within 3 s never becomes the anchor. When GNSS stops being trusted, it is dead reckoning
+from the last trusted fix, corrected by keyframe matches.
+
+**Terrain map:** while GNSS is trusted, an ORB keyframe is stored every 2 m with its GNSS position, plus
+the home keyframe where home was set. During vision navigation the current frame is matched to nearby
+keyframes every 5 frames. That gives an absolute position and heading, blended in at gain 0.5. Arrival
+home is confirmed when the home keyframe matches within 1.5 m. Thumbnails go to
+`session/<name>/keyframes/`.
+
+**Calibrate:** walk a tape-measured straight 10 m at working height, then run
+`gnss-guardian calibrate --video walk/video.avi --distance 10`. This writes `config/calibration.yaml`
+(merged over the defaults).
+
+### Measured (rendered ground: soil/gravel texture, 1.5° pole sway, 3 cm height bob, sensor noise)
+
+| Test | Result |
+|---|---|
+| Straight 10 m, odometry only | 0.015 m drift (0.15 %); 0.03 m with 3° sway / 5 cm bob |
+| 60 m loop with four corners, odometry only | 0.03–0.08 m closure, heading ≤ 0.3° (10–30 fps) |
+| GNSS-denied lap with a 12 % calibration error | worst 1.44 m dead reckoning → 0.67 m with keyframe matches; home confirmed |
+| Calibration from a 10 m walk (true focal 635 px, start 700 px) | fitted 634.8 px |
+| Vision vs GNSS position while trusted | median 0.09 m, max 0.66 m (corners) |
+| Frame rate, this laptop (i5-8365U), 640×480 | odometry 68–130 fps all cores, 48–57 fps one core; with ORB matching 55–84 fps |
+| Frame rate, Pi 5 | **not measured**; expected ~25–50 fps at 640×480 and ~50–75 fps at `process_scale: 0.5`, from CPU benchmark ratios (~0.4–0.6× this laptop). Run `gnss-guardian vision-bench` on the Pi. |
+
 ## Limits (read before quoting results)
+
+- **Vision numbers are from rendered ground, not footage.** Real ground adds lens distortion (the OV5647
+  has visible barrel distortion), uneven surfaces and grass, pole tilt that does not average out, shadows
+  and motion blur. Expect several times the rendered drift until the Pi camera walks are recorded and
+  measured. Vision thresholds (velocity cross-check, quality) are tuned on synthetic walks only.
+- **Flat ground at a fixed height is assumed.** Height comes from the config; tilting the pole biases the
+  scale. A gimbal or the optional IMU would help.
+- **Low texture** (smooth concrete, water, darkness) stops the vision track (`vision_lost`) rather than
+  guessing. Daylight and a short exposure are needed against motion blur.
 
 - **Jamming vs blockage:** the L86 reports no AGC or noise floor, so RF jamming, foil, buildings and dense
   canopy are indistinguishable from NMEA. The detector says "GNSS denied: jamming or blockage". For
@@ -140,6 +204,14 @@ python3 record_nmea.py --out real_l86_clean.nmea --duration-min 30    # in tmux;
 Lines carry a host-time prefix (`2026-10-23T08:15:02.123Z,$GPRMC,...`), so replay can check GNSS time
 against the host clock. Live mode writes the same format to `session/<name>/raw/`.
 
+`tools/record_session.py` records the Pi camera and the L86 together on one clock (standalone:
+`python3-picamera2`, `python3-opencv`, `python3-serial`). It writes `video.avi`, `frames.csv` and
+`nmea.nmea`, which replay together with `gnss-guardian replay walk/nmea.nmea --video walk/video.avi`:
+```bash
+python3 record_session.py --out calib10m --duration-min 1      # tape-measured straight 10 m, stand 3 s at each end
+python3 record_session.py --out walk01 --duration-min 5        # stand 90 s, then walk a loop back to the start
+```
+
 ## Layout
 
 ```
@@ -152,13 +224,23 @@ gnss_guardian/
   detect/jamming.py        denial score      detect/spoofing.py  spoofing score
   detect/hysteresis.py     CLEAR/SUSPECT/ALARM levels
   detect/engine.py         Epoch -> Verdict (JSON-safe)
+  vision/camera.py         Picamera2 (import-guarded) / USB / video file sources, one clock with GNSS
+  vision/flow.py           Shi-Tomasi + pyramidal LK + RANSAC similarity, bridging, ORB fallback
+  vision/odometry.py       camera track and heading, GNSS-course alignment
+  vision/terrain.py        ORB keyframe map, keyframe and home matching
+  vision/nav.py            VisionNav: anchoring to trusted GNSS, corrections, observe_vision feed
+  vision/calibrate.py      focal length from a measured walk      vision/bench.py  frame-rate benchmark
   run.py session.py home.py status.py cli.py
 tools/fake_l86.py          serial simulator with jam/spoof/walk profiles, --write for files
-tools/record_nmea.py       standalone recorder for the Pi
+tools/synth_walk.py        rendered downward-camera walks (video + frames.csv + truth + matching NMEA)
+tools/record_nmea.py       standalone NMEA recorder for the Pi
+tools/record_session.py    standalone camera + NMEA recorder for the Pi
 tools/make_proxy_fixture.py  phone log -> L86-style proxy NMEA (needs an IonWatch checkout; offline)
 ```
 
 Session output: `session/<name>/session.json` (run info, home), `epochs.jsonl` (one verdict per epoch),
-`events.jsonl` (level changes, home, serial and receiver events), `latest.json`, `raw/`.
+`events.jsonl` (level changes, home, serial, receiver, camera and keyframe events), `latest.json`,
+`raw/`, `keyframes/`. With a camera, each epoch also carries a `vision` block (position at the epoch's
+time, heading, quality, mode, keyframe match, home confirmation).
 
-Pins: `pandas<3`, `numpy<2.5` (kept from IonWatch).
+Pins: `pandas<3`, `numpy<2.5` (kept from IonWatch), `opencv-python-headless<5` (the Pi's apt OpenCV is 4.x).

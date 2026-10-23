@@ -3,7 +3,7 @@ and obeys the PMTK commands gnss-guardian sends (baud, output rate, sentences, c
 
     python tools/fake_l86.py [--fixture tests/fixtures/l86_sim_10min.nmea] [--transport auto|pty|tcp]
                              [--speed 1] [--start 2026-10-22T14:00:00Z] [--duration-s 600]
-                             [--walk loop:W:H:MPS]
+                             [--walk loop:W:H:MPS [--still-s S]]
                              [--jam ramp|sudden --jam-at T [--jam-rate-db-s 4] [--jam-depth-db 25]]
                              [--spoof jump|drift|time --spoof-at T [--jump-m 500] [--drift-mps 1.0]
                               [--time-offset-s 30] [--spoof-cn0 uniform|natural]]
@@ -41,6 +41,7 @@ L86 behaviour:
   PMTK251,<baud>  switch baud (acked at the old baud); the line carries at most baud/10 bytes/s
   PMTK220,<ms>    fix interval -> output rate 1000/ms Hz, capped at --max-rate
   PMTK314,...     sentence selection (GLL,RMC,VTG,GGA,GSA,GSV,...)
+  PGCMD,33,1      periodic antenna status: PGTOP,11,3 after every fix (GPTXT ANTSTATUS only at power-on)
   PMTK353,a,b,c,d,e  GPS, GLONASS, Galileo, Galileo-full, BeiDou; Galileo (GAGSV) is off at power-on,
                   like the real GPS+GLONASS L86-M33. Settings are lost on --inject-disconnect.
 """
@@ -187,7 +188,10 @@ class Scenario:
     def render(self, k: int, s: float, enabled: set, galileo: bool, fade=None) -> list[str]:
         a = self.a
         c = self.cyc[k % len(self.cyc)]
-        e, n, ve, vn = walk_at(a.walk, s)
+        if s >= a.still_s:
+            e, n, ve, vn = walk_at(a.walk, s - a.still_s)
+        else:                                            # standing at the start point (warm-up, home)
+            e, n, ve, vn = (*walk_at(a.walk, 0.0)[:2], 0.0, 0.0)
         t = self.start + timedelta(seconds=s)
         spoof = self.spoofing(s)
         if spoof and a.spoof == "jump":
@@ -251,7 +255,7 @@ class Scenario:
             la, ns, lo, ew = _nmea_ll(lat, lon)
             sog = math.hypot(ve, vn) / KNOT
             cog = math.degrees(math.atan2(ve, vn)) % 360 if sog > 0.05 else 0.0
-            if not a.walk and not (spoof and a.spoof == "drift"):
+            if (not a.walk or s < a.still_s) and not (spoof and a.spoof == "drift"):
                 sog = 0.02
             out.append(f"GPRMC,{hms},A,{la},{ns},{lo},{ew},{sog:.2f},{cog:.2f},{t:%d%m%y},,,A")
             out.append(f"GPVTG,{cog:.2f},T,,M,{sog:.2f},N,{sog * 1.852:.2f},K,A")
@@ -407,6 +411,7 @@ class Module:
         self.enabled = {"RMC", "GGA", "GSA", "GSV", "VTG", "GLL"}
         self.galileo = False
         self.banner = True                   # GPTXT ANTSTATUS after power-on
+        self.antenna_report = False          # PGCMD,33,1: PGTOP,11,3 every fix
 
     def command(self, data: bytes) -> list[bytes]:
         """Handle incoming bytes; return acks to send."""
@@ -415,12 +420,17 @@ class Module:
         *lines, self._buf = self._buf.split(b"\n")
         for raw in lines:
             line = raw.decode("ascii", "replace").strip()
-            if not line.startswith("$PMTK") or "*" not in line:
+            if not (line.startswith("$PMTK") or line.startswith("$PGCMD")) or "*" not in line:
                 continue
             body = line[1:line.rindex("*")]
             if checksum(body) != line[line.rindex("*") + 1:].upper()[:2]:
                 continue
             f = body.split(",")
+            if f[0] == "PGCMD":
+                if f[1:3] == ["33", "1"]:
+                    self.antenna_report = True
+                    print("SIM antenna status reports on", flush=True)
+                continue
             cmd = f[0][4:]
             flag = "3"
             if cmd == "251" and len(f) > 1 and f[1].isdigit():
@@ -465,6 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--wait-client-s", type=float, default=30.0, help="tcp: wait this long for the first client")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--walk", default=None, help="loop:W:H:MPS rectangle walk (default: static)")
+    ap.add_argument("--still-s", type=float, default=0.0, help="stand at the start point this long before walking")
     ap.add_argument("--jam", choices=["ramp", "sudden"], default=None)
     ap.add_argument("--jam-at", type=float, default=120.0)
     ap.add_argument("--jam-rate-db-s", type=float, default=4.0)
@@ -570,6 +581,8 @@ def main(argv=None):
                 if mod.banner:
                     sents = [sentence("GPTXT,01,01,02,ANTSTATUS=OK")] + sents
                     mod.banner = False
+                if mod.antenna_report:
+                    sents = sents + [sentence("PGTOP,11,3")]
                 data = ("\r\n".join(sents) + "\r\n").encode()
                 if budget <= 0:
                     continue

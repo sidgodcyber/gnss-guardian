@@ -4,10 +4,11 @@ Reused from IonWatch live mode: reconnect after unplug/open failure, reopen afte
 (a GPIO UART does not error when the L86 loses power, it goes quiet: event no_serial_data),
 partial-line and garbage handling, raw NMEA log with host-time prefix, and the PMTK rate setup
 (PMTK251 baud, PMTK314 sentences, PMTK220 fix interval, measured rate with fallback to 1 Hz).
-New: PMTK353 to enable Galileo (verified by GAGSV appearing), epoch-level output, no_data events.
+New: PMTK353 to enable Galileo (verified by GAGSV appearing), PGCMD,33,1 for periodic antenna
+status, epoch-level output, no_data events, optional camera thread (vision navigation).
 
     gnss-guardian live --l86 /dev/serial0 [--rate 1|5|10] [--l86-constellations gps,glonass,galileo]
-                       --out session/NAME [--home lat,lon]
+                       [--camera auto|picam|usb:N|video:FILE | --no-camera] --out session/NAME [--home lat,lon]
 
 Time: mono = time.monotonic() x clock_scale (clock_scale > 1 only to pair with a fast simulator).
 No network is used: the port is a device or the pyserial URL the user passes.
@@ -15,6 +16,7 @@ No network is used: the port is a device or the pyserial URL the user passes.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,9 +101,11 @@ class L86RateSetup:
     baud (event rate_fallback).
     """
 
-    def __init__(self, rate: int, baud: int, measure_s: float = 30.0, constellations: str | None = None):
+    def __init__(self, rate: int, baud: int, measure_s: float = 30.0, constellations: str | None = None,
+                 antenna_status: bool = False):
         self.requested, self.baud, self.measure_s = rate, baud, measure_s
         self.constellations = constellations
+        self.antenna_status = antenna_status
         self.fallen_back = False
         self.measured: float | None = None
         self._epochs: set = set()
@@ -128,6 +132,8 @@ class L86RateSetup:
         if self.constellations:
             ser.write(pmtk(self.constellations))
             log.info("L86 constellations: %s", self.constellations)
+        if self.antenna_status:
+            ser.write(pmtk("PGCMD,33,1"))               # periodic PGTOP,11,x antenna status
         ser.flush()
         return ser
 
@@ -157,8 +163,59 @@ class L86RateSetup:
         return serial_mod.serial_for_url(port, baudrate=self.baud, timeout=timeout)
 
 
+class CameraThread(threading.Thread):
+    """Feeds camera frames to VisionNav until stopped or the source ends; counts the frame rate."""
+
+    def __init__(self, source, nav, writer):
+        super().__init__(daemon=True, name="camera")
+        self.source, self.nav, self.writer = source, nav, writer
+        self.stop = threading.Event()
+        self.frames = 0
+        self.fps: float | None = None
+        self.error: str | None = None
+
+    def run(self):
+        t0, n0 = time.monotonic(), 0
+        try:
+            while not self.stop.is_set():
+                fr = self.source.read()
+                if fr is None:
+                    break
+                self.nav.on_frame(fr.t, fr.gray)
+                self.frames += 1
+                if time.monotonic() - t0 >= 10:
+                    self.fps = round((self.frames - n0) / (time.monotonic() - t0), 1)
+                    self.writer.event("vision_rate", fps=self.fps, frames=self.frames)
+                    t0, n0 = time.monotonic(), self.frames
+        except Exception as e:                           # a camera fault must not stop GNSS detection
+            self.error = repr(e)
+            log.exception("camera thread stopped")
+        finally:
+            self.source.close()
+
+
+def start_camera(spec: str, cfg: dict, out_dir: Path, writer, clock):
+    """(VisionNav, CameraThread), or (None, None) when the camera cannot be opened: live mode then
+    runs GNSS-only and says so."""
+    from gnss_guardian.vision.camera import CameraUnavailable, open_camera
+    from gnss_guardian.vision.nav import VisionNav
+    try:
+        src = open_camera(spec, cfg, clock=clock, pace=spec.startswith("video:"))
+    except (CameraUnavailable, ValueError) as e:
+        log.warning("camera %s unavailable (%s): running GNSS-only, no vision navigation", spec, e)
+        writer.event("camera_unavailable", camera=spec, error=str(e))
+        return None, None
+    nav = VisionNav(cfg, keyframe_dir=out_dir / "keyframes")
+    th = CameraThread(src, nav, writer)
+    th.start()
+    writer.event("camera_open", camera=spec)
+    log.info("camera %s open", spec)
+    return nav, th
+
+
 def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellations: list[str] | None = None,
-             clock_scale: float = 1.0, duration_s: float | None = None, home=None, echo=print) -> dict:
+             clock_scale: float = 1.0, duration_s: float | None = None, home=None, echo=print,
+             camera: str | None = None) -> dict:
     """Read NMEA from ``port`` (/dev/serial0, COM3, or a pyserial URL such as socket://127.0.0.1:5000)
     until stopped or ``duration_s`` wall seconds. Returns the pipeline summary."""
     import serial
@@ -169,9 +226,12 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
     cmd353 = pmtk353(constellations) if constellations else None
     writer = SessionWriter(out_dir, {"mode": "live", "port": port, "baud": baud, "node_id": cfg["node_id"],
                                      "rate_requested": rate, "constellations": cmd353}, append=True)
-    pipe = Pipeline(cfg, writer, home, echo=lambda s: log.info(s))
+    nav = cam_thread = None
+    if camera:
+        nav, cam_thread = start_camera(camera, cfg, out_dir, writer, lambda: time.monotonic() * clock_scale)
+    pipe = Pipeline(cfg, writer, home, echo=lambda s: log.info(s), vision=nav)
     raw = RawNmeaLog(out_dir / "raw")
-    setup = L86RateSetup(rate, baud, lv["rate_measure_s"], cmd353)
+    setup = L86RateSetup(rate, baud, lv["rate_measure_s"], cmd353, cfg["l86"]["antenna_status"])
     want_galileo = bool(constellations) and "galileo" in constellations
     galileo_t0, galileo_done, n_acks = None, False, 0
     ser, pending, connected_once, down_since = None, b"", False, None
@@ -181,7 +241,7 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
     log.info("live: port %s @ %d baud, rate %d Hz, out %s", port, baud, rate, out_dir)
 
     def mono():
-        return time.monotonic() * clock_scale
+        return time.monotonic() * clock_scale     # the camera frames use the same clock
 
     def handle(verdicts):
         nonlocal last_epoch, no_data_flagged, galileo_t0, galileo_done, ser, pending
@@ -272,6 +332,10 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
     except KeyboardInterrupt:
         log.info("stopped by user")
     finally:
+        if cam_thread is not None:
+            cam_thread.stop.set()
+            cam_thread.join(timeout=2)
+            writer.event("camera_stopped", frames=cam_thread.frames, fps=cam_thread.fps, error=cam_thread.error)
         if ser is not None:
             ser.close()
         handle(pipe.flush())

@@ -9,7 +9,55 @@ rig:
   max_speed_mps: 3.0             # handheld pole rig; a real drone profile would raise this
 
 imu:
-  enabled: false                 # optional MPU6050 on I2C; auto-detected only when enabled (Phase 2)
+  enabled: false                 # optional MPU6050 on I2C; auto-detected only when enabled (not used yet)
+
+camera:                          # Pi Camera Rev 1.3 (OV5647), pointing straight down
+  source: auto                   # auto (Picamera2, else usb:0) | picam | usb:N | video:PATH
+  width: 640
+  height: 480
+  fps: 30
+  hfov_deg: 53.5                 # OV5647 horizontal field of view (datasheet); calibrate refines focal_px
+  height_m: 1.0                  # lens above the ground on the rig
+  focal_px: null                 # fitted by `gnss-guardian calibrate` (at width px); null = from hfov_deg
+  calibration_file: config/calibration.yaml   # merged over this file when present (written by calibrate)
+
+vision:
+  process_scale: 1.0             # flow on a downscaled image (0.5 = 320x240) if the CPU is slow
+  max_corners: 200               # Shi-Tomasi corners (RANSAC needs far fewer; LK cost scales with this)
+  corner_quality: 0.01
+  corner_min_dist_px: 8
+  redetect_below: 100            # re-detect corners when fewer tracks survive
+  lk_win_px: 15                  # pyramidal Lucas-Kanade window, levels, iterations
+  lk_levels: 3                   #   (3 levels follow ~30 px/frame: 1.4 m/s at 30 fps, 1 m up)
+  lk_iters: 20
+  fb_check: true                 # forward-backward check (doubles LK cost; RANSAC alone also rejects outliers)
+  fb_max_px: 1.0                 # forward-backward check: drop tracks that do not return within this
+  ransac_px: 2.0                 # similarity (rotation + translation + scale) RANSAC threshold
+  min_inliers: 20                # fewer: the frame gives no motion (low texture, blur)
+  full_quality_inliers: 80       # quality = min(1, inliers / this) x inlier ratio x fit
+  low_quality: 0.3               # below: frame flagged low_texture
+  max_skip_frames: 5             # failed frames bridged by keeping the flow's reference frame (turns, blur)
+  orb_fallback: true             # when Lucas-Kanade fails, try ORB matching (a turn starting abruptly)
+  hold_s: 0.5                    # low texture: keep the last velocity this long, then stop and flag vision_lost
+  velocity_window_s: 1.0         # velocity for the spoofing cross-check: displacement over this window
+  heading_align_tau_s: 20        # while GNSS is trusted and moving, the camera heading follows the GNSS course
+  align_min_speed_mps: 0.5       #   with this time constant (also learns the camera's mount yaw),
+  heading_align_window_s: 2      #   only on straight stretches: GNSS course and camera heading both
+  heading_align_max_turn_deg: 10 #   within this many degrees over the window
+  align_snap_min_m: 2.0          # the first alignment waits for this much straight travel
+  anchor_delay_s: 3              # vision track = GNSS fix this old + camera displacement since (a spoof that
+                                 #   is caught within this delay never becomes the anchor)
+
+keyframes:                       # visual terrain map, built while GNSS is trusted
+  spacing_m: 2.0                 # a keyframe every N m of travel (plus the home keyframe)
+  orb_features: 500
+  match_every_n_frames: 5        # during vision navigation, try a keyframe match this often
+  search_radius_m: 10            # keyframes within this distance of the current estimate are candidates
+  ratio: 0.75                    # Lowe ratio test
+  min_inliers: 20
+  max_correction_m: 8            # a match implying a larger jump is rejected
+  correction_gain: 0.5           # blend of the keyframe position into the vision position
+  home_confirm_m: 1.5            # home reached: home keyframe matched with the camera within this distance
 
 home:
   set_after_s: 30                # home = median of the first N s of trusted fixes after warm-up (unless --home)
@@ -25,6 +73,8 @@ l86:
     PQ: QZSS
     GI: NavIC
   galileo_check_s: 15            # after PMTK353, GAGSV must appear within this many data seconds
+  antenna_status: true           # send PGCMD,33,1 on open: MTK modules then report PGTOP,11,x every fix (the
+                                 #   GPTXT ANTSTATUS banner appears only at power-up). Not yet verified on our L86.
 
 live:
   reconnect_s: 2                 # serial retry interval after unplug / open failure
@@ -67,8 +117,11 @@ detect:
     uniform_min_sats: 5
     newcomer_frac: [0.25, 0.6]   # ramp: tracked satellites not seen in the baseline window
     newcomer_min_sats: 4
-    vision_window_s: 3           # GNSS-minus-vision velocity averaged over this window (Phase 2 hook)
-    vision_diff_mps: [0.4, 1.0]  # ramp on |mean velocity difference|; set from synthetic data only so far
+    vision_window_s: 3           # GNSS-minus-vision velocity averaged over this window ...
+    vision_diff_mps: [0.4, 1.0]  # ... ramp on |mean difference| (fast drag-off)
+    vision_long_window_s: 10     # and over this longer window ...
+    vision_drift_mps: [0.2, 0.45]  # ... ramp (slow drag-off: 0.5 m/s builds 5 m of disagreement in 10 s)
+                                 # vision thresholds: set from synthetic walks only so far
     vision_min_quality: 0.5
     vision_max_age_s: 1.5
     weights: {speed: 0.95, time: 0.95, altitude: 0.7, uniform_cn0: 0.55, newcomers: 0.5, vision: 0.8}

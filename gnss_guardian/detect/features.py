@@ -97,7 +97,9 @@ class FeatureExtractor:
         self.slack_m = d["spoofing"]["jump_slack_m"]
         self.vision_max_age = d["spoofing"]["vision_max_age_s"]
         self.vision_window = d["spoofing"]["vision_window_s"]
+        self.vision_long = d["spoofing"]["vision_long_window_s"]
         self._vdiff: deque = deque()                 # (t, d_east, d_north) GNSS minus vision velocity
+        self._gvel: deque = deque(maxlen=10)         # (t, v_east, v_north) of recent valid fixes
         self.baseline = Baseline(cfg)
         self._prev_fix: tuple[float, float, float, float | None] | None = None   # t, lat, lon, alt
 
@@ -160,20 +162,44 @@ class FeatureExtractor:
                 f["time_jump_s"] = abs(off - bo)
         # GNSS velocity against vision velocity (Phase 2 hook): the mean difference vector over
         # vision_window_s, so frame-to-frame flow noise averages out while a steady drag-off does not
-        f["vision_diff_mps"] = None
-        if vision is not None and ep.fix_valid and ep.sog_mps is not None and ep.mono is not None:
+        f["vision_diff_mps"] = f["vision_drift_mps"] = None
+        if ep.fix_valid and ep.sog_mps is not None:
+            self._gvel.append((t, *geo.velocity_en(ep.sog_mps, ep.cog_deg or 0.0)))
+        else:
+            self._gvel.clear()
+        if vision is not None and self._gvel and ep.mono is not None:
             vt, ve, vn, q = vision
-            if ep.mono - vt <= self.vision_max_age and q is not None:
-                ge, gn = geo.velocity_en(ep.sog_mps, ep.cog_deg or 0.0)
+            g = self._gnss_velocity_at(vt)
+            if abs(ep.mono - vt) <= self.vision_max_age and q is not None and g is not None:
+                ge, gn = g
                 self._vdiff.append((t, ge - ve, gn - vn))
-                while self._vdiff and self._vdiff[0][0] <= t - self.vision_window:
+                while self._vdiff and self._vdiff[0][0] <= t - self.vision_long:
                     self._vdiff.popleft()
-                if len(self._vdiff) >= 2:
-                    de = statistics.fmean(x for _, x, _ in self._vdiff)
-                    dn = statistics.fmean(y for _, _, y in self._vdiff)
-                    f["vision_diff_mps"] = math.hypot(de, dn)
+                f["vision_diff_mps"] = self._mean_diff(t, self.vision_window)
+                f["vision_drift_mps"] = self._mean_diff(t, self.vision_long)
                 f["vision_quality"] = q
+        else:
+            self._vdiff.clear()                      # a gap in the comparison restarts both windows
         return f
+
+    def _mean_diff(self, t: float, window: float) -> float | None:
+        """|mean GNSS-minus-vision velocity| over the window, once the samples cover 70 % of it."""
+        w = [(x, y) for tt, x, y in self._vdiff if tt > t - window]
+        if len(w) < 2 or t - next(tt for tt, _, _ in self._vdiff if tt > t - window) < 0.7 * window - 1:
+            return None
+        return math.hypot(statistics.fmean(x for x, _ in w), statistics.fmean(y for _, y in w))
+
+    def _gnss_velocity_at(self, t: float) -> tuple[float, float] | None:
+        """GNSS velocity interpolated to time t (the centre of the vision velocity window), so both
+        velocities describe the same interval; the newest fix if t is up to 0.6 s past it."""
+        g = self._gvel
+        if t >= g[-1][0]:
+            return g[-1][1:] if t - g[-1][0] <= 0.6 else None
+        for (t0, e0, n0), (t1, e1, n1) in zip(list(g), list(g)[1:]):
+            if t0 <= t <= t1:
+                w = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+                return e0 + w * (e1 - e0), n0 + w * (n1 - n0)
+        return None
 
     def commit(self, ep: Epoch, feats: dict, clean: bool) -> None:
         """After the verdict: grow the baseline with clean epochs, remember the fix."""

@@ -79,3 +79,25 @@ def first_level(verdicts, detector, level="ALARM", rate_hz=1.0):
 
 def at(seconds: float) -> datetime:
     return T0 + timedelta(seconds=seconds)
+
+
+synth_walk = _load_tool("synth_walk")
+SYNTH_STILL_S, SYNTH_DURATION_S, SYNTH_FPS = 25, 75, 15
+
+
+def fast_vision_cfg(cfg):
+    """Shorter warm-up and home window so synthetic sessions stay short (vision behaviour unchanged)."""
+    c = copy.deepcopy(cfg)
+    c["detect"]["baseline"]["warmup_s"] = 20
+    c["home"]["set_after_s"] = 5
+    return c
+
+
+@pytest.fixture(scope="session")
+def synth_session(tmp_path_factory):
+    """One rendered walk shared by the vision pipeline tests: stand 25 s, then the 20 x 10 m loop at
+    1.2 m/s; video.avi + frames.csv + truth.csv + nmea.nmea on one clock."""
+    out = tmp_path_factory.mktemp("synth")
+    synth_walk.main([str(out), "--walk", "loop:20:10:1.2", "--still-s", str(SYNTH_STILL_S),
+                     "--duration-s", str(SYNTH_DURATION_S), "--fps", str(SYNTH_FPS), "--nmea"])
+    return out

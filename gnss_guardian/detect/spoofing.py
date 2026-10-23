@@ -8,7 +8,8 @@ Indicators (combined with a noisy-OR, so one strong indicator alone raises the a
   altitude     altitude changed faster than the rig can climb
   uniform_cn0  C/N0 high and nearly identical across satellites (one transmitter, one antenna)
   newcomers    many tracked satellites the baseline window never saw
-  vision       GNSS velocity disagrees with camera velocity (Phase 2 hook)
+  vision       GNSS velocity disagrees with camera velocity: mean difference over 3 s (fast
+               drag-off) or 10 s (slow drag-off)
 
 Limit: a slow drag-off below the rig's speed with natural-looking C/N0 and the same satellite
 set is invisible to these GNSS-only indicators; only the vision cross-check can catch it.
@@ -36,8 +37,9 @@ class SpoofingDetector:
         if f["n_tracked"] >= c["newcomer_min_sats"]:
             newcomers = ramp(f["newcomer_frac"], c["newcomer_frac"])
         vision = 0.0
-        if f.get("vision_diff_mps") is not None and f.get("vision_quality", 0) >= c["vision_min_quality"]:
-            vision = ramp(f["vision_diff_mps"], c["vision_diff_mps"])
+        if f.get("vision_quality", 0) >= c["vision_min_quality"]:
+            vision = max(ramp(f.get("vision_diff_mps"), c["vision_diff_mps"]),
+                         ramp(f.get("vision_drift_mps"), c["vision_drift_mps"]))
         s.parts = {"speed": ramp(speed / self.vmax, c["speed_ramp_x"]),
                    "time": ramp(f["time_jump_s"], c["time_jump_s"]),
                    "altitude": ramp(f["alt_rate_mps"], c["alt_rate_mps"]),
@@ -65,5 +67,11 @@ class SpoofingDetector:
         if p["newcomers"] > 0:
             s.reasons.append(f"{f['n_newcomers']}/{f['n_tracked']} tracked satellites not seen in the baseline window")
         if p["vision"] > 0:
-            s.reasons.append(f"GNSS velocity differs from vision by {f['vision_diff_mps']:.1f} m/s")
+            short = ramp(f.get("vision_diff_mps"), c["vision_diff_mps"])
+            if short >= ramp(f.get("vision_drift_mps"), c["vision_drift_mps"]):
+                s.reasons.append(f"GNSS velocity differs from vision by {f['vision_diff_mps']:.1f} m/s "
+                                 f"over {c['vision_window_s']} s")
+            else:
+                s.reasons.append(f"GNSS track drifting from the vision track: {f['vision_drift_mps']:.2f} m/s "
+                                 f"over {c['vision_long_window_s']} s")
         return s

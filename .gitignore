@@ -10,3 +10,6 @@ __pycache__/
 venv/
 build/
 dist/
+/synth/
+/*.nmea
+/*.avi

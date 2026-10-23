@@ -13,6 +13,7 @@ dependencies = [
     "pyyaml>=6",
     "click>=8",
     "pyserial>=3.5",
+    "opencv-python-headless>=4.8,<5",   # the Pi's apt python3-opencv is 4.x; keep laptop and Pi on one API line
     "tzdata; platform_system == 'Windows'",
 ]
 

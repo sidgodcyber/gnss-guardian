@@ -2,10 +2,12 @@
 session folder (epochs, events, latest, home).
 
     gnss-guardian replay FILE.nmea --out session/NAME [--speed 0|1|N] [--home lat,lon]
+                                   [--video video.avi [--frames frames.csv]]
 
-Replay reads recorded NMEA (host-prefixed from tools/record_nmea.py, IonWatch RawNmeaLog or
-fake_l86 --write; plain NMEA works too but then has no host clock for the time check) and
-prints the event timeline.
+Replay reads recorded NMEA (host-prefixed from tools/record_nmea.py / record_session.py, IonWatch
+RawNmeaLog or fake_l86 --write; plain NMEA works too but then has no host clock for the time check)
+and prints the event timeline. With --video the camera frames are merged with the NMEA lines in
+host-time order, so vision runs exactly as it did live.
 """
 from __future__ import annotations
 
@@ -18,13 +20,17 @@ from gnss_guardian.home import HomeSetter
 from gnss_guardian.io.epochs import EpochBuilder
 from gnss_guardian.io.nmea import split_prefix
 from gnss_guardian.session import SessionWriter
+from gnss_guardian.vision.nav import VisionNav
 
 DETECTORS = ("jamming", "spoofing")
 
 
 class Pipeline:
-    def __init__(self, cfg: dict, writer: SessionWriter, home: tuple[float, float] | None = None, echo=None):
+    def __init__(self, cfg: dict, writer: SessionWriter, home: tuple[float, float] | None = None, echo=None,
+                 vision: VisionNav | None = None):
         self.cfg = cfg
+        self.vision = vision
+        self._home_vision = None
         self.builder = EpochBuilder(cfg)
         self.engine = DetectionEngine(cfg)
         self.home = HomeSetter(cfg, home)
@@ -50,6 +56,10 @@ class Pipeline:
         return out
 
     def _handle(self, ep) -> dict:
+        if self.vision is not None:
+            vel = self.vision.velocity()
+            if vel is not None:
+                self.engine.observe_vision(*vel)
         v = self.engine.update(ep)
         t = epoch_time(ep)
         new_home = self.home.update(v, t)
@@ -81,8 +91,26 @@ class Pipeline:
                 self.transitions.append(tr)
                 self.writer.event("level", **tr)
                 self.echo(f"{v['t_gnss']}  {d:<8} -> {lvl:<7} {v[d]['score']:.2f}  {'; '.join(v[d]['reasons'])}")
+        if self.vision is not None:
+            self._vision_step(t, v)
         self.writer.epoch(v)
         return v
+
+    def _vision_step(self, t: float, v: dict) -> None:
+        nav = self.vision
+        nav.on_gnss(t, v)
+        st = nav.state(at=t)                     # vision position at this epoch's time, comparable with GNSS
+        v["vision"] = st
+        for kf in nav.new_keyframes:
+            self.writer.event("keyframe", t_gnss=v["t_gnss"], id=kf.id, e=round(kf.e, 2), n=round(kf.n, 2),
+                              heading=round(kf.heading, 1), home=kf.home, features=len(kf.pts))
+            if kf.home:
+                self.echo(f"{v['t_gnss']}  home keyframe stored ({len(kf.pts)} features)")
+        nav.new_keyframes.clear()
+        if st["home_confirmed"] and st["home_confirmed"] != self._home_vision:
+            self._home_vision = st["home_confirmed"]
+            self.writer.event("home_confirmed", t_gnss=v["t_gnss"], **st["home_confirmed"])
+            self.echo(f"{v['t_gnss']}  home keyframe matched: {st['home_confirmed']['offset_m']} m from home")
 
     def summary(self) -> dict:
         first = {}
@@ -94,17 +122,39 @@ class Pipeline:
 
 
 def replay(path: str | Path, cfg: dict, out: str | Path, speed: float = 0.0,
-           home: tuple[float, float] | None = None, echo=None) -> dict:
-    """Push a recorded NMEA file through the pipeline. speed 0 = as fast as possible, else
-    N x real time (paced by the host prefix, or by GNSS time when there is none)."""
+           home: tuple[float, float] | None = None, echo=None, video: str | Path | None = None,
+           frames_csv: str | Path | None = None, video_start=None) -> dict:
+    """Push a recorded NMEA file (and optionally its camera video) through the pipeline. speed 0 =
+    as fast as possible, else N x real time (paced by the host prefix, or by GNSS time when there
+    is none). Video frames are fed before every NMEA line that is later than them."""
+    out = Path(out)
     writer = SessionWriter(out, {"mode": "replay", "source": str(path), "node_id": cfg["node_id"],
-                                 "speed": speed})
-    pipe = Pipeline(cfg, writer, home, echo)
+                                 "speed": speed, "video": str(video) if video else None})
+    nav = cam = frame = None
+    if video:
+        from gnss_guardian.vision.camera import open_camera
+        cam = open_camera(f"video:{video}", cfg, frames_csv=frames_csv, start=video_start)
+        nav = VisionNav(cfg, keyframe_dir=out / "keyframes")
+        frame = cam.read()
+    pipe = Pipeline(cfg, writer, home, echo, vision=nav)
     t0 = wall0 = None
+    n_frames = 0
+    prev_host = None
+    gap = cfg["live"]["read_timeout_s"]
     with open(path, encoding="ascii", errors="replace") as f:
         for line in f:
+            _, host, _ = split_prefix(line)
+            if host is not None and prev_host is not None and (host - prev_host).total_seconds() > gap:
+                pipe.flush()                     # the burst ended here: live mode emits the epoch now
+            prev_host = host or prev_host
+            if cam is not None:
+                if host is None:
+                    raise ValueError(f"{path}: replay with --video needs host-prefixed NMEA to line up the frames")
+                while frame is not None and frame.t <= host.timestamp():
+                    nav.on_frame(frame.t, frame.gray)
+                    n_frames += 1
+                    frame = cam.read()
             if speed > 0:
-                _, host, _ = split_prefix(line)
                 t = host.timestamp() if host else (pipe.builder.parser.cur_time.timestamp()
                                                    if pipe.builder.parser.cur_time else None)
                 if t is not None:
@@ -114,4 +164,10 @@ def replay(path: str | Path, cfg: dict, out: str | Path, speed: float = 0.0,
                         time.sleep(min(rem, 0.25))
             pipe.feed(line)
     pipe.finish()
-    return pipe.summary()
+    if cam is not None:
+        cam.close()
+    s = pipe.summary()
+    if nav is not None:
+        s["frames"] = n_frames
+        s["keyframes"] = len(nav.map.keyframes)
+    return s

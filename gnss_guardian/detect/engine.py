@@ -24,7 +24,7 @@ FEATURE_KEYS = ("n_visible", "n_tracked", "n_used", "cn0_mean", "cn0_std", "n_ju
                 "tracked_drop_db",
                 "drop_frac", "lost_frac", "mean_drop_db", "hdop", "hdop_base", "hdop_ratio", "fix_lost",
                 "n_newcomers", "newcomer_frac", "jump_m", "implied_speed_mps", "sog_mps", "alt_rate_mps",
-                "time_offset_s", "time_jump_s", "vision_diff_mps")
+                "time_offset_s", "time_jump_s", "vision_diff_mps", "vision_drift_mps")
 
 
 def _r(x, nd=3):
