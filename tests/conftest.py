@@ -82,7 +82,7 @@ def at(seconds: float) -> datetime:
 
 
 synth_walk = _load_tool("synth_walk")
-SYNTH_STILL_S, SYNTH_DURATION_S, SYNTH_FPS = 25, 75, 15
+SYNTH_STILL_S, SYNTH_DURATION_S, SYNTH_FPS = 30, 75, 15        # home is set at ~27 s: still standing
 
 
 def fast_vision_cfg(cfg):
@@ -95,7 +95,7 @@ def fast_vision_cfg(cfg):
 
 @pytest.fixture(scope="session")
 def synth_session(tmp_path_factory):
-    """One rendered walk shared by the vision pipeline tests: stand 25 s, then the 20 x 10 m loop at
+    """One rendered walk shared by the vision pipeline tests: stand 30 s, then the 20 x 10 m loop at
     1.2 m/s; video.avi + frames.csv + truth.csv + nmea.nmea on one clock."""
     out = tmp_path_factory.mktemp("synth")
     synth_walk.main([str(out), "--walk", "loop:20:10:1.2", "--still-s", str(SYNTH_STILL_S),

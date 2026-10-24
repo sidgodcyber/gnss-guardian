@@ -5,8 +5,9 @@ Heading = sum of the similarity rotations, initialised (and slowly corrected whi
 and the rig moves) from the GNSS course, corrected by keyframe matches. Aligning the *track* angle
 to the GNSS course, rather than copying the course into the heading, also learns how the camera is
 turned on the pole (mount yaw). Low texture: the last velocity is kept for ``hold_s``, then the
-track stops and the frame is flagged ``vision_lost``. A failed frame inside a good stretch costs
-nothing: the flow keeps its reference frame and the next good frame measures the whole motion.
+track stops and frames are flagged ``vision_lost`` until one tracks again. A failed frame inside a
+good stretch costs nothing: the flow keeps its reference frame and the next good frame measures the
+whole motion.
 """
 from __future__ import annotations
 
@@ -72,6 +73,8 @@ class VisualOdometry:
             self._t_ref = t
         else:
             flag = "low_texture"            # skipped: the next good frame measures the motion since the reference
+        if flag in ("start", "low_texture") and self.last["flag"] == "vision_lost":
+            flag = "vision_lost"            # lost until a frame tracks again (no flicker back to "usable")
         q = res.quality if res is not None else 0.0
         self.hist.append((t, self.e, self.n, self.heading, q))
         while self.hist and self.hist[0][0] < t - self.keep_s:

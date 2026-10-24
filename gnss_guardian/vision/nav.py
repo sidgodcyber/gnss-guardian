@@ -54,7 +54,12 @@ class VisionNav:
             self._frames += 1
             st = self.vo.step(t, gray)
             pos = self._position()
-            if pos is not None and self._trusted and st["quality"] >= self.v["low_quality"]:
+            if self._want_home_kf and pos is not None and math.hypot(*pos) > self.k["home_confirm_m"]:
+                self._want_home_kf = False          # moved off home before a good frame: no home keyframe
+            # keyframes need world positions: before the heading is aligned to the GNSS course the
+            # track runs in an arbitrary direction (only the home keyframe, taken standing, is safe)
+            if pos is not None and self._trusted and st["quality"] >= self.v["low_quality"] and \
+                    (self.vo.aligned or self._want_home_kf):
                 kf = self.map.maybe_add(t, gray, pos[0], pos[1], self.vo.heading, home=self._want_home_kf)
                 if kf:
                     self._want_home_kf = False
