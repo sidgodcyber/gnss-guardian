@@ -3,7 +3,7 @@ and obeys the PMTK commands gnss-guardian sends (baud, output rate, sentences, c
 
     python tools/fake_l86.py [--fixture tests/fixtures/l86_sim_10min.nmea] [--transport auto|pty|tcp]
                              [--speed 1] [--start 2026-10-22T14:00:00Z] [--duration-s 600]
-                             [--walk loop:W:H:MPS [--still-s S]]
+                             [--walk loop:W:H:MPS | outback:DIST:HEADING:MPS [--still-s S]]
                              [--jam ramp|sudden --jam-at T [--jam-rate-db-s 4] [--jam-depth-db 25]]
                              [--spoof jump|drift|time --spoof-at T [--jump-m 500] [--drift-mps 1.0]
                               [--time-offset-s 30] [--spoof-cn0 uniform|natural]]
@@ -138,11 +138,23 @@ def _nmea_ll(lat: float, lon: float) -> tuple[str, str, str, str]:
 
 def walk_at(spec: str | None, s: float) -> tuple[float, float, float, float]:
     """(east, north, v_east, v_north) of the rig at simulated second s. spec 'loop:W:H:MPS':
-    a W x H m rectangle walked east, north, west, south from the start point."""
+    a W x H m rectangle walked east, north, west, south from the start point. 'outback:DIST:HEADING:MPS':
+    DIST m out along HEADING (deg from north), the same way back to the start, then standing there
+    (the return a pilot makes along the breadcrumb path)."""
     if not spec:
         return 0.0, 0.0, 0.0, 0.0
-    _, w, h, v = spec.split(":")
-    w, h, v = float(w), float(h), float(v)
+    kind, a, b, v = spec.split(":")
+    if kind == "outback":
+        dist, hd, v = float(a), math.radians(float(b)), float(v)
+        ue, un = math.sin(hd), math.cos(hd)
+        d = v * max(s, 0.0)
+        if d <= dist:
+            return ue * d, un * d, ue * v, un * v
+        if d <= 2 * dist:
+            back = 2 * dist - d
+            return ue * back, un * back, -ue * v, -un * v
+        return 0.0, 0.0, 0.0, 0.0
+    w, h, v = float(a), float(b), float(v)
     d = (v * max(s, 0.0)) % (2 * (w + h))
     for length, (ue, un), (oe, on) in ((w, (1, 0), (0, 0)), (h, (0, 1), (w, 0)),
                                        (w, (-1, 0), (w, h)), (h, (0, -1), (0, h))):
@@ -474,7 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-rate", type=float, default=10.0, help="highest output rate the module accepts")
     ap.add_argument("--wait-client-s", type=float, default=30.0, help="tcp: wait this long for the first client")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--walk", default=None, help="loop:W:H:MPS rectangle walk (default: static)")
+    ap.add_argument("--walk", default=None, help="loop:W:H:MPS rectangle or outback:DIST:HEADING:MPS out-and-back walk (default: static)")
     ap.add_argument("--still-s", type=float, default=0.0, help="stand at the start point this long before walking")
     ap.add_argument("--jam", choices=["ramp", "sudden"], default=None)
     ap.add_argument("--jam-at", type=float, default=120.0)

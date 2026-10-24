@@ -1,7 +1,7 @@
 """Synthetic downward-camera walks over a procedural ground texture, with known motion: the ground
 truth for testing vision odometry, keyframes and calibration without footage.
 
-    python tools/synth_walk.py OUT_DIR [--walk loop:20:10:1.2 | --straight 10:1.2:90]
+    python tools/synth_walk.py OUT_DIR [--walk loop:20:10:1.2 | outback:12:90:1.2 | --straight 10:1.2:90]
                                        [--duration-s 60] [--fps 30] [--sway-deg 1.5] [--bob-m 0.03]
                                        [--noise 2] [--mount-yaw-deg 0] [--true-focal-px 635]
                                        [--start 2026-10-22T14:00:00Z] [--nmea]
