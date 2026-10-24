@@ -230,7 +230,7 @@ def start_camera(spec: str, cfg: dict, out_dir: Path, writer, clock):
 
 
 def start_display(cfg: dict, hub: LiveHub, nav, writer, out_dir: Path, port: int | None, record: bool,
-                  cam_thread, on_inject, echo):
+                  cam_thread, on_inject, echo, clock=time.monotonic):
     """(server, overlay thread); either is None when not wanted or not possible. Display only: a
     failure here is logged and live mode carries on."""
     from gnss_guardian.overlay import OverlayThread
@@ -251,7 +251,7 @@ def start_display(cfg: dict, hub: LiveHub, nav, writer, out_dir: Path, port: int
     if server is not None or record:
         ov = OverlayThread(cfg, hub, nav, record=out_dir / "overlay.mp4" if record else None,
                            camera_fps=lambda: cam_thread.fps if cam_thread else None,
-                           camera_target_fps=cam_thread.target_fps if cam_thread else None)
+                           camera_target_fps=cam_thread.target_fps if cam_thread else None, clock=clock)
         ov.start()
     return server, ov
 
@@ -277,16 +277,17 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
         nav, cam_thread = start_camera(camera, cfg, out_dir, writer, lambda: time.monotonic() * clock_scale)
     pipe = Pipeline(cfg, writer, home, echo=lambda s: log.info(s), vision=nav)
     raw = RawNmeaLog(out_dir / "raw")
-    injector = DemoInjector() if demo_inject else None
+    injector = DemoInjector(clock=lambda: time.monotonic() * clock_scale) if demo_inject else None
     det_raw = RawNmeaLog(out_dir / "detector_input") if injector else None
     pending_events: deque = deque()                 # from the display server's thread, logged by this one
 
     def on_inject(kind, result):
-        pending_events.append(("demo_inject", {"action": kind, "at_utc": utc_now(), **(result or {})}))
+        pending_events.append(("demo_inject", {"action": kind, "at_utc": utc_now(),
+                                               "mono": round(time.monotonic() * clock_scale, 3), **(result or {})}))
 
     hub = LiveHub(cfg, out_dir, injector, vision_fps=lambda: cam_thread.fps if cam_thread else None)
     server, overlay = start_display(cfg, hub, nav, writer, out_dir, overlay_port, overlay_record, cam_thread,
-                                    on_inject, echo)
+                                    on_inject, echo, clock=lambda: time.monotonic() * clock_scale)
     if injector:
         writer.event("demo_inject_enabled", note="software injection before the detector; raw/ is unmodified")
     setup = L86RateSetup(rate, baud, lv["rate_measure_s"], cmd353, cfg["l86"]["antenna_status"])

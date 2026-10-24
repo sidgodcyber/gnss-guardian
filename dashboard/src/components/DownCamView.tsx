@@ -6,6 +6,7 @@ interface Props {
   data: DashboardFile;
   row: Row;
   videoUrl?: string;
+  liveStreamUrl?: string;      // MJPEG overlay from the Pi (live --overlay PORT)
   currentTimeSec: number;
   isPlaying: boolean;
   playbackSpeed: number;
@@ -13,7 +14,7 @@ interface Props {
 
 const DRIFT_S = 0.3;
 
-export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, currentTimeSec, isPlaying, playbackSpeed }) => {
+export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUrl, currentTimeSec, isPlaying, playbackSpeed }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const fps = data.meta.video_fps ?? 30;
@@ -60,7 +61,14 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, currentTimeS
       </div>
 
       <div className="relative flex-1 min-h-0 bg-black">
-        {videoUrl ? (
+        {liveStreamUrl ? (
+          <img
+            src={liveStreamUrl}
+            alt="live camera overlay from the Pi"
+            onError={() => setVideoError('no overlay stream: is live running with --overlay on this port?')}
+            className="absolute inset-0 w-full h-full object-contain"
+          />
+        ) : videoUrl ? (
           <video
             ref={videoRef}
             src={videoUrl}
@@ -89,7 +97,7 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, currentTimeS
           </div>
         )}
 
-        {v && (
+        {v && !liveStreamUrl && (
           <div className="absolute top-3 left-3 p-2.5 bg-slate-950/85 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300 space-y-1">
             <div className="flex justify-between gap-4"><span className="text-slate-500">quality</span><span>{fmt(v.quality, 2)}</span></div>
             <div className="flex justify-between gap-4"><span className="text-slate-500">inliers</span><span>{v.n_inliers ?? '–'}</span></div>

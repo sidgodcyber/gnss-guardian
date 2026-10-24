@@ -102,6 +102,40 @@ export interface Row {
   guidance: Guidance | null;
   latch: Latch | null;
   frame: number | null;
+  injection?: Injection | null;     // demo spoof injection active at this row (live --demo-inject)
+}
+
+// Demo spoof injection (software, before the detector): never a real attack.
+export interface Injection {
+  id: number;
+  type: 'jump' | 'drift';
+  bearing_deg: number;
+  m: number | null;
+  mps: number | null;
+  elapsed_s: number;
+  offset_m: number;
+}
+
+// live.json from `gnss-guardian live --overlay PORT` (format gnss-guardian-live/1).
+export interface LiveView {
+  format: string;
+  written_utc: string;
+  node_id: string;
+  session: string | null;
+  seq: number;
+  t: number;
+  t_gnss: string;
+  state: GuardianState | null;
+  labels: string[];
+  home: { set: boolean; detail: string } | null;
+  home_keyframe: { status: string; detail: string; features?: number } | null;
+  vision: { fps: number | null; mode: string | null; aligned: boolean | null } | null;
+  injection: { enabled: boolean; active: Injection | null };
+  track: Array<[number, number, number, string]>;
+  keyframes: Array<[number, number, boolean]>;
+  row: Row;
+  config: DashboardConfig;
+  age_s?: number;
 }
 
 export interface Transition {
@@ -194,4 +228,5 @@ export interface LoadedSession {
   name: string;
   data: DashboardFile;
   videoUrl?: string;
+  liveBase?: string;      // live source: http://<pi>:PORT (overlay stream at /, live.json)
 }

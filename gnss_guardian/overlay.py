@@ -9,7 +9,8 @@ vision), displacement from home in metres and its bearing, camera heading, keyfr
 "HOME MATCH" marker for a fresh strict home-keyframe match, "DEMO INJECTION ACTIVE" while a demo
 spoof is injected, and an inset map (metres from home) of the vision track against the GNSS track
 with the keyframes and home. Each frame is JPEG-encoded for the MJPEG stream (LiveHub) and, with
---overlay-record, appended to overlay.mp4.
+--overlay-record, appended to overlay.mp4, its time (the epochs' clock) to overlay_frames.csv so the
+dashboard can show it in step with the session (gnss-guardian replay SESSION_FOLDER).
 
 Rate: overlay.fps, lowered by one (down to overlay.min_fps) whenever the camera thread's measured
 rate falls below overlay.protect_vision_frac of the camera's own frame rate: the overlay gives way,
@@ -118,7 +119,7 @@ def _inset(img, track: dict, fu, size: int = 96, y_bottom: int = H - 2) -> None:
 
 class OverlayThread(threading.Thread):
     def __init__(self, cfg: dict, hub, nav=None, record: str | Path | None = None, camera_fps=None,
-                 camera_target_fps: float | None = None):
+                 camera_target_fps: float | None = None, clock=time.monotonic):
         super().__init__(daemon=True, name="overlay")
         o = cfg["overlay"]
         self.cfg, self.hub, self.nav = cfg, hub, nav
@@ -127,7 +128,9 @@ class OverlayThread(threading.Thread):
         self.camera_fps = camera_fps or (lambda: None)
         self.cam_target = camera_target_fps or cfg["camera"]["fps"]
         self.record = Path(record) if record else None
+        self.clock = clock
         self.writer = None
+        self._times = None
         self.stop = threading.Event()
         self.frames = 0
         self.render_ms: float | None = None
@@ -140,6 +143,8 @@ class OverlayThread(threading.Thread):
             w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*fourcc), self.fps, (W, H), True)
             if w.isOpened():
                 self.events.append(("overlay_record", {"path": str(path), "fps": self.fps}))
+                self._times = open(self.record.with_name("overlay_frames.csv"), "w", encoding="ascii")
+                self._times.write("idx,t_mono\n")
                 return w
             w.release()
         self.events.append(("overlay_record_failed", {"path": str(self.record)}))
@@ -170,6 +175,7 @@ class OverlayThread(threading.Thread):
                     self.hub.publish_jpeg(jpg.tobytes())
                 if self.writer is not None:
                     self.writer.write(img)
+                    self._times.write(f"{self.frames},{self.clock():.3f}\n")
                 self.frames += 1
                 el = time.perf_counter() - t0
                 self.render_ms = round(1000 * el, 1)
@@ -181,3 +187,4 @@ class OverlayThread(threading.Thread):
         finally:
             if self.writer is not None:
                 self.writer.release()
+                self._times.close()

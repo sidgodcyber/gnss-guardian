@@ -84,7 +84,10 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
 
 @cli.command()
 @click.argument("nmea_file", type=click.Path(exists=True))
-@click.option("--out", required=True, type=click.Path(file_okay=False))
+@click.option("--out", default=None, type=click.Path(file_okay=False),
+              help="Session folder to write (required, except for a live session folder).")
+@click.option("--rerun", is_flag=True, help="Live session folder: re-run detection on its NMEA into --out "
+                                            "(no camera) instead of exporting what live mode recorded.")
 @click.option("--speed", default=0.0, show_default=True, type=float, help="0 = as fast as possible, N = N x real time.")
 @click.option("--home", default=None, help="Home point lat,lon (default: set after the first trusted fixes).")
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
@@ -93,16 +96,34 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
 @click.option("--frames", "frames_csv", default=None, type=click.Path(exists=True, dir_okay=False),
               help="Frame timestamps (default: frames.csv next to the video).")
 @click.option("--video-start", default=None, help="ISO UTC time of the first frame when there is no frames.csv.")
-def replay(nmea_file, out, speed, home, config_path, video, frames_csv, video_start):
+def replay(nmea_file, out, rerun, speed, home, config_path, video, frames_csv, video_start):
     """Run detection (and vision, with --video) over a recording and print the event timeline.
 
     NMEA_FILE may be a recording folder: nmea.nmea or gnss.nmea, with video.avi or camera.avi and
-    frames.csv used as the video when present. Writes session/NAME/dashboard.json for the dashboard."""
+    frames.csv used as the video when present. Writes session/NAME/dashboard.json for the dashboard.
+
+    NMEA_FILE may also be a live session folder (live / field-demo): its dashboard.json is then written
+    in that folder from what live mode recorded (state machine, vision, demo injections, overlay video);
+    --rerun --out NAME re-runs detection on its NMEA instead."""
     from datetime import datetime
     from pathlib import Path
 
+    from gnss_guardian.run import export_live_session, is_live_session, live_session_nmea
     from gnss_guardian.run import replay as run_replay
     from gnss_guardian.run import resolve_recording
+    if Path(nmea_file).is_dir() and is_live_session(nmea_file):
+        cfg = load_config(config_path)
+        if not rerun:
+            s = export_live_session(nmea_file, cfg)
+            click.echo(f"live session {nmea_file}: {s['epochs']} epochs, states: {' -> '.join(map(str, s['states']))}")
+            click.echo(f"dashboard: {s['dashboard']}" + (f" (video: {s['video']})" if s["video"] else " (no overlay video)"))
+            return
+        if out is None:
+            raise click.UsageError("--rerun needs --out NAME")
+        nmea_file = str(live_session_nmea(nmea_file, out))
+        click.echo(f"re-running detection on {nmea_file} (no camera: live sessions keep no raw video)")
+    if out is None:
+        raise click.UsageError("--out is required (except for a live session folder)")
     if Path(nmea_file).is_dir():
         try:
             nmea_file, found_video, found_frames = resolve_recording(nmea_file)

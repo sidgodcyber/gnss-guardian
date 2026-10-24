@@ -3,7 +3,12 @@
     session/<name>/dashboard.json         timeline (one row per second), state transitions, detector
                                           level changes, keyframes, return-home routes, events, indicator config
     session/<name>/dashboard_video.webm   the session video re-encoded for the browser (VP8), when
-                                          replay ran with --video; rows carry the frame index
+                                          replay ran with --video (or a live session recorded its
+                                          overlay); rows carry the frame index
+
+A live session folder (gnss-guardian live / field-demo) exports the same way, from what live mode
+recorded (its own state machine and vision): gnss-guardian replay session/<name>. Demo injections
+(demo_inject events) mark the rows they cover ("injection") and appear in the event list.
 
 Positions are local metres from the home point (east, north). No latitude, longitude or altitude is
 written: rows are built from an explicit list of fields.
@@ -148,6 +153,39 @@ def _frame_times(video: Path, frames_csv: Path | None, video_start) -> list[floa
     return [t0 + i / fps for i in range(n)]
 
 
+def _injection_text(ev: dict) -> str:
+    if ev["action"] == "stop":
+        return "demo injection stopped"
+    size = f"{ev.get('m')} m" if ev["action"] == "jump" else f"{ev.get('mps')} m/s"
+    return (f"DEMO INJECTION {ev['action']} {size} at {ev.get('bearing_deg')} deg (software, before the detector; "
+            f"not a real attack)")
+
+
+def _injections(events: list[dict], t0: float) -> list[tuple[float, float, dict | None]]:
+    """(t_start, t_end, injection) from the demo_inject events, t relative to the first epoch."""
+    out, cur = [], None
+    for ev in events:
+        if ev["kind"] != "demo_inject" or ev.get("mono") is None:
+            continue
+        t = ev["mono"] - t0
+        if cur is not None:
+            out.append((cur[0], t, cur[1]))
+            cur = None
+        if ev["action"] != "stop":
+            cur = (t, {k: ev.get(k) for k in ("id", "type", "bearing_deg", "m", "mps")})
+    if cur is not None:
+        out.append((cur[0], math.inf, cur[1]))
+    return out
+
+
+def _injection_at(spans, t: float) -> dict | None:
+    for a, b, inj in spans:
+        if a <= t < b:
+            d = inj["m"] if inj["type"] == "jump" else round(inj["mps"] * (t - a), 1)
+            return {**inj, "elapsed_s": round(t - a, 1), "offset_m": d}
+    return None
+
+
 def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = None,
                      frames_csv: str | Path | None = None, video_start=None) -> dict:
     session = Path(session)
@@ -162,6 +200,7 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
         by_gnss.setdefault(v.get("t_gnss"), t)
         by_seq.setdefault(v.get("seq"), t)
     state_events = {e["seq"]: e for e in events if e["kind"] == "state"}
+    injections = _injections(events, t0)
 
     timeline, transitions, levels = [], [], []
     prev_state, last_row_t = "__start__", None
@@ -181,12 +220,19 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
                 levels.append({"t": _r(t), "t_gnss": v.get("t_gnss"), "detector": d, "level": v[d]["level"],
                                "score": _r(v[d]["score"]), "reasons": v[d]["reasons"]})
         if last_row_t is None or t - last_row_t >= 0.9:    # about one row per second at 1/5/10 Hz
-            timeline.append(_row(v, t))
+            row = _row(v, t)
+            row["injection"] = _injection_at(injections, t)
+            timeline.append(row)
             last_row_t = t
 
     keyframes, routes, other = [], [], []
     for ev in events:
-        t = by_seq.get(ev["seq"]) if ev.get("seq") is not None else by_gnss.get(ev.get("t_gnss"))
+        if ev.get("seq") is not None:
+            t = by_seq.get(ev["seq"])
+        elif ev.get("mono") is not None and ev.get("t_gnss") is None:
+            t = ev["mono"] - t0
+        else:
+            t = by_gnss.get(ev.get("t_gnss"))
         t = _r(t) if t is not None else None
         kind = ev["kind"]
         if kind == "keyframe":
@@ -206,6 +252,8 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
                                                           f"({ev.get('inliers')} inliers)"})
         elif kind == "warmup_done":
             other.append({"t": t, "kind": kind, "detail": "baseline ready, detection active"})
+        elif kind == "demo_inject":
+            other.append({"t": t, "kind": kind, "detail": _injection_text(ev)})
         elif kind == "antenna":
             other.append({"t": t, "kind": kind, "detail": f"antenna {ev.get('status')} (was {ev.get('previous')})"})
         elif kind not in ("level", "state"):

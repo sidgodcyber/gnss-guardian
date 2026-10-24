@@ -12,6 +12,9 @@ import pytest
 from conftest import fast_vision_cfg, synth_walk
 from test_live_sim import start_sim
 
+from click.testing import CliRunner
+
+from gnss_guardian.cli import cli
 from gnss_guardian.io.serial_live import run_live
 from gnss_guardian.session import read_jsonl
 from gnss_guardian.status import status_line
@@ -61,7 +64,7 @@ def test_live_display_guide_and_demo_injection(tmp_path, live_cfg, still):
     out = tmp_path / "s"
     th = threading.Thread(target=run_live, args=(port, 9600, out, live_cfg), daemon=True,
                           kwargs=dict(clock_scale=SPEED, duration_s=25, camera=f"video:{still}", overlay_port=0,
-                                      demo_inject=True, echo=lambda s: None))
+                                      overlay_record=True, demo_inject=True, echo=lambda s: None))
     th.start()
     try:
         srv = wait_for(lambda: event(out, "display_server"))
@@ -106,6 +109,19 @@ def test_live_display_guide_and_demo_injection(tmp_path, live_cfg, still):
     rmc = [ln.split(",")[4:6] for ln in raw.splitlines() if "RMC" in ln and ",A," in ln]
     assert len({tuple(x) for x in rmc}) == 1                                       # raw: the real (static) fix
     assert json.loads((out / "live.json").read_text())["format"] == "gnss-guardian-live/1"
+
+    # the field run opens in the dashboard afterwards: replay on the live folder exports what live recorded
+    r = CliRunner().invoke(cli, ["replay", str(out)])
+    assert r.exit_code == 0, r.output
+    d = json.loads((out / "dashboard.json").read_text(encoding="utf-8"))
+    assert d["meta"]["mode"] == "live" and d["meta"]["video"] == "dashboard_video.webm"
+    assert any(row["injection"] and row["injection"]["type"] == "drift" for row in d["timeline"])
+    assert [e["detail"].split(" (")[0] for e in d["events"] if e["kind"] == "demo_inject"] == [
+        "DEMO INJECTION drift 1.0 m/s at 90.0 deg", "demo injection stopped"]
+    assert any(row["frame"] is not None for row in d["timeline"])
+    r = CliRunner().invoke(cli, ["replay", str(out), "--rerun", "--out", str(tmp_path / "rerun")])
+    assert r.exit_code == 0 and "detector_input.nmea" in r.output, r.output
+    assert (tmp_path / "rerun" / "dashboard.json").exists()
 
 
 def test_busy_overlay_port_does_not_stop_live(tmp_path, live_cfg):

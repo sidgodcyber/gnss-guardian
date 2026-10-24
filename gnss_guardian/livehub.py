@@ -104,6 +104,7 @@ class LiveHub:
                        "e": vis.get("e"), "n": vis.get("n")} if vis else None,
             "injection": inj,
             "track": [[_r(t, 1), e, n, s] for t, e, n, s in self.track],
+            "keyframes": [[_r(e), _r(n), home] for e, n, home in self.keyframes],
             "row": row, "config": self.config,
         }
 

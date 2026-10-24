@@ -10,6 +10,9 @@ interface AvionicsHeaderProps {
   currentSessionName: string;
   onSelectSession: (name: string) => void;
   onPickFolder: (files: FileList) => void;
+  liveAddress: string | null;
+  onConnectLive: (address: string) => void;
+  onDisconnectLive: () => void;
 }
 
 const navItems = [
@@ -45,9 +48,13 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
   currentSessionName,
   onSelectSession,
   onPickFolder,
+  liveAddress,
+  onConnectLive,
+  onDisconnectLive,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const folderRef = useRef<HTMLInputElement | null>(null);
+  const [addr, setAddr] = useState(liveAddress ?? '');
 
   return (
     <header className="border-b border-slate-800 bg-slate-950/95 backdrop-blur-md sticky top-0 z-50">
@@ -56,10 +63,10 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
           <span className="text-base font-bold tracking-tight text-slate-100 whitespace-nowrap">GNSS Guardian</span>
           <div
             className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-950/80 border border-sky-500/50 text-[11px] font-mono font-medium text-sky-300"
-            title="Reads exported session files only: no network, no telemetry link"
+            title={liveAddress ? 'Polling live.json from the Pi on the LAN (read only)' : 'Reads exported session files only'}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-            <span>Replay mode</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${liveAddress ? 'bg-red-400 animate-pulse' : 'bg-sky-400'}`} />
+            <span>{liveAddress ? 'Live' : 'Replay mode'}</span>
           </div>
         </div>
 
@@ -91,6 +98,32 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
               e.target.value = '';
             }}
           />
+          <form
+            className="flex items-center gap-1"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (addr.trim()) onConnectLive(addr.trim());
+            }}
+          >
+            <input
+              value={addr}
+              onChange={(e) => setAddr(e.target.value)}
+              placeholder="Pi address, e.g. 192.168.1.20:8080"
+              aria-label="Live source: Pi address"
+              className="w-44 bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-md px-2 py-1.5 font-mono"
+            />
+            {liveAddress ? (
+              <button type="button" onClick={onDisconnectLive}
+                className="px-2.5 py-1.5 bg-red-900 hover:bg-red-800 text-red-100 text-xs font-medium rounded-md border border-red-700">
+                Stop live
+              </button>
+            ) : (
+              <button type="submit"
+                className="px-2.5 py-1.5 bg-sky-800 hover:bg-sky-700 text-sky-50 text-xs font-medium rounded-md border border-sky-600">
+                Live
+              </button>
+            )}
+          </form>
           <button
             onClick={() => folderRef.current?.click()}
             className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-md border border-slate-700"

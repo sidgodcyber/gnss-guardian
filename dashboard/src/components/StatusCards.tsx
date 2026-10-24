@@ -32,12 +32,16 @@ const Card: React.FC<{ label: string; value: React.ReactNode; sub?: React.ReactN
   </div>
 );
 
-export const StatusCards: React.FC<{ row: Row }> = ({ row }) => {
+export const StatusCards: React.FC<{ row: Row; stale?: boolean }> = ({ row, stale = false }) => {
   const { gnss, jamming, spoofing, vision, fused } = row;
   const st = stateLabel(row.state);
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-      <Card label="State" value={st} tone={stateText[st]} sub={row.gnss_trusted ? 'GNSS trusted' : 'GNSS not trusted'} />
+      {stale ? (
+        <Card label="State" value="GNSS UNKNOWN" tone="text-slate-300" sub={`stale · last: ${st}`} />
+      ) : (
+        <Card label="State" value={st} tone={stateText[st]} sub={row.gnss_trusted ? 'GNSS trusted' : 'GNSS not trusted'} />
+      )}
       <Card
         label="GNSS fix"
         value={gnss.fix_valid ? 'valid' : 'no fix'}

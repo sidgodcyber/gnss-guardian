@@ -247,6 +247,51 @@ def replay(path: str | Path, cfg: dict, out: str | Path, speed: float = 0.0,
     return s
 
 
+def is_live_session(folder: str | Path) -> bool:
+    """A session folder written by live mode (gnss-guardian live / field-demo)."""
+    import json
+    folder = Path(folder)
+    try:
+        info = json.loads((folder / "session.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return info.get("mode") == "live" and (folder / "epochs.jsonl").is_file()
+
+
+def export_live_session(folder: str | Path, cfg: dict) -> dict:
+    """dashboard.json for a live session from what live mode recorded (its state machine, vision and
+    demo injections), with the recorded overlay as the video when there is one."""
+    from gnss_guardian.dashboard_export import write_dashboard_json
+    from gnss_guardian.session import read_jsonl
+    folder = Path(folder)
+    video = next((folder / n for n in ("overlay.mp4", "overlay.avi") if (folder / n).is_file()), None)
+    frames = folder / "overlay_frames.csv"
+    if video is not None and not frames.is_file():
+        video = None
+    path = write_dashboard_json(folder, cfg, video=video, frames_csv=frames if video else None)
+    eps = read_jsonl(folder / "epochs.jsonl")
+    states, prev = [], None
+    for v in eps:
+        if v.get("state") != prev:
+            states.append(v.get("state"))
+            prev = v.get("state")
+    return {"epochs": len(eps), "states": states, "dashboard": str(path), "video": str(video) if video else None}
+
+
+def live_session_nmea(folder: str | Path, out: str | Path) -> Path:
+    """One NMEA file from a live session for re-running detection: detector_input/ (what the detector saw,
+    demo injections included) when present, else raw/."""
+    folder = Path(folder)
+    src = folder / "detector_input" if (folder / "detector_input").is_dir() else folder / "raw"
+    files = sorted(src.glob("nmea_*.nmea"))
+    if not files:
+        raise FileNotFoundError(f"{folder}: no NMEA in raw/ or detector_input/")
+    Path(out).mkdir(parents=True, exist_ok=True)
+    dst = Path(out) / f"{src.name}.nmea"
+    dst.write_text("".join(f.read_text(encoding="ascii", errors="replace") for f in files), encoding="ascii")
+    return dst
+
+
 RECORDING_NMEA = ("nmea.nmea", "gnss.nmea")      # tools/record_session.py, standalone Pi recorders
 RECORDING_VIDEO = ("video.avi", "camera.avi")
 
