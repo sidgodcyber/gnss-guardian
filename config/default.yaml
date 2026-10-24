@@ -59,6 +59,23 @@ keyframes:                       # visual terrain map, built while GNSS is trust
 home:
   set_after_s: 30                # home = median of the first N s of trusted fixes after warm-up (unless --home)
 
+state:                           # Phase 3 state machine (gnss_guardian/state.py), one step per GNSS epoch:
+                                 # GNSS_OK -> SUSPECT -> JAMMED | SPOOFED -> VISION_NAV -> RETURN_HOME -> HOME_REACHED
+  return_home_after_s: 2         # VISION_NAV with a healthy camera track this long -> RETURN_HOME
+  home_radius_m: 2.0             # HOME_REACHED: camera position within this of home ...
+  home_match_max_age_s: 3        # ... and the home keyframe matched within this many s (when there is one)
+  home_leave_m: 4.0              # HOME_REACHED -> RETURN_HOME when the camera position moves further away
+  spoof_release:                 # SPOOFED (and the states after it) -> GNSS_OK only after GNSS and the camera
+    agree_s: 10                  #   agree this many seconds in a row; GNSS stays untrusted until then, even
+    max_pos_diff_m: 3.0          #   if the detector clears by itself. Agreement: GNSS within this of the
+    max_vel_diff_mps: 0.3        #   camera position, GNSS-minus-camera velocity (3 s mean) below this,
+    max_score: 0.3               #   spoofing score below this, jamming CLEAR, fix valid.
+                                 # Without a camera the detector's own latch (min_alarm_s) releases it.
+                                 # Jamming releases when the detectors are CLEAR again.
+
+guidance:                        # return-home guidance: advisory output only, never a command to the aircraft
+  waypoint_reached_m: 1.5        # reverse breadcrumb path: a keyframe waypoint counts as passed within this
+
 l86:
   talkers:                       # NMEA talker -> constellation
     GP: GPS
@@ -133,4 +150,5 @@ detect:
     alarm_immediate: 0.8         # ... or a single epoch >= this
     alarm_off: 0.3
     alarm_hold_s: 5              # score below alarm_off this long: ALARM -> SUSPECT
-    min_alarm_s: {jamming: 0, spoofing: 30}   # a spoof stays latched; Phase 3 releases it on vision agreement
+    min_alarm_s: {jamming: 0, spoofing: 30}   # a spoof stays latched; with a camera the state machine
+                                              #   releases it on vision agreement (state.spoof_release)

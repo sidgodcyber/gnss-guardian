@@ -66,6 +66,7 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
                  duration_s=duration_s, home=_home(home),
                  camera=None if no_camera else (camera or cfg["camera"]["source"]))
     click.echo(f"epochs {s['epochs']}, first alarms {s['first_alarm'] or '-'}")
+    click.echo(f"states: {' -> '.join(s['states']) or '-'}")
 
 
 @cli.command()
@@ -104,6 +105,7 @@ def replay(nmea_file, out, speed, home, config_path, video, frames_csv, video_st
     click.echo(f"epochs {s['epochs']} | jamming ALARM {s['jamming_alarm_epochs']} / SUSPECT "
                f"{s['jamming_suspect_epochs']} | spoofing ALARM {s['spoofing_alarm_epochs']} / SUSPECT "
                f"{s['spoofing_suspect_epochs']} | first alarms {s['first_alarm'] or '-'}")
+    click.echo(f"states: {' -> '.join(s['states']) or '-'}")
     if video:
         click.echo(f"vision: {s['frames']} frames, {s['keyframes']} keyframes")
     click.echo(f"session: {out} (dashboard: {s['dashboard']})")

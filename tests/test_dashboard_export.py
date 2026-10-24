@@ -28,11 +28,15 @@ def assert_no_coordinates(d):
 
 def test_jam_demo_transitions(tmp_path, cfg):
     d = run(tmp_path, cfg, "jam", "--jam", "ramp", "--jam-at", "120", "--recover-after", "40")
-    assert states(d) == [None, "GNSS_OK", "SUSPECT", "JAMMED", "SUSPECT", "GNSS_OK"]
+    assert states(d) == ["WARMING_UP", "GNSS_OK", "SUSPECT", "JAMMED", "GNSS_OK"]    # no camera: JAMMED until trusted
     t = [x["t"] for x in d["transitions"]]
     assert t == sorted(t)
     jammed = d["transitions"][3]
-    assert 120 <= jammed["t"] <= 126 and "jamming.drop_frac" in jammed["indicators"]
+    assert 120 <= jammed["t"] <= 126 and "jamming.drop_frac" in jammed["indicators"] and jammed["cause"] == "jamming"
+    assert d["transitions"][4]["reasons"] == ["detectors CLEAR: GNSS trusted again"]
+    assert {r["state"] for r in d["timeline"]} == {"WARMING_UP", "GNSS_OK", "SUSPECT", "JAMMED"}   # read from epochs
+    assert all(r["fused"]["source"] == "last_fix" for r in d["timeline"] if r["state"] == "JAMMED")
+    assert d["meta"]["state_source"].startswith("pipeline state machine") and d["routes"] == []
     assert [(x["detector"], x["level"]) for x in d["detector_levels"]] == [
         ("jamming", "SUSPECT"), ("jamming", "ALARM"), ("jamming", "SUSPECT"), ("jamming", "CLEAR")]
     assert len(d["timeline"]) == 300 and d["meta"]["video"] is None
@@ -42,7 +46,7 @@ def test_jam_demo_transitions(tmp_path, cfg):
 
 def test_spoof_demo_transitions(tmp_path, cfg):
     d = run(tmp_path, cfg, "spoof", "--spoof", "jump", "--spoof-at", "120")
-    assert states(d) == [None, "GNSS_OK", "SPOOFED"]                     # latched to the end of the file
+    assert states(d) == ["WARMING_UP", "GNSS_OK", "SPOOFED"]             # latched to the end of the file
     spoofed = d["transitions"][2]
     assert 118 <= spoofed["t"] <= 123 and "spoofing.speed" in spoofed["indicators"]
     assert all(i.startswith("spoofing.") for i in spoofed["indicators"])  # only detectors above CLEAR
@@ -62,7 +66,7 @@ def test_vision_session_exports_video_and_track(tmp_path, cfg, synth_session):
     frames_idx = [r["frame"] for r in d["timeline"] if r["frame"] is not None]
     assert frames_idx == sorted(frames_idx) and len(frames_idx) > 0.9 * len(d["timeline"])
     assert any(r["vision"] and r["vision"]["e"] is not None for r in d["timeline"])
-    assert d["keyframes"] and states(d)[:2] == [None, "GNSS_OK"]
+    assert d["keyframes"] and states(d) == ["WARMING_UP", "GNSS_OK"]
     assert_no_coordinates(d)
 
 
@@ -82,7 +86,7 @@ def test_pi_recorder_folder_replays_like_record_session(tmp_path, cfg):
     b = replay(nmea, cfg, tmp_path / "s_pi")
     assert a["epochs"] == b["epochs"] == 200
     da, db = (json.loads((tmp_path / s / "dashboard.json").read_text(encoding="utf-8")) for s in ("s_ref", "s_pi"))
-    assert states(da) == states(db) == [None, "GNSS_OK", "SUSPECT", "JAMMED", "SUSPECT", "GNSS_OK"]
+    assert states(da) == states(db) == ["WARMING_UP", "GNSS_OK", "SUSPECT", "JAMMED", "GNSS_OK"]
 
 
 def test_recording_folder_files_and_frames_csv(tmp_path):

@@ -8,7 +8,7 @@ from gnss_guardian.cli import cli
 
 
 def live_rate(*args):
-    with mock.patch("gnss_guardian.io.serial_live.run_live", return_value={"epochs": 0, "first_alarm": {}}) as m:
+    with mock.patch("gnss_guardian.io.serial_live.run_live", return_value={"epochs": 0, "first_alarm": {}, "states": []}) as m:
         r = CliRunner().invoke(cli, ["live", "--l86", "socket://127.0.0.1:1", "--no-camera", *args])
     return r, (m.call_args.kwargs["rate"] if m.called else None)
 

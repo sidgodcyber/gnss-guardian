@@ -1,5 +1,5 @@
-"""The detection pipeline shared by live mode and replay: NMEA lines -> epochs -> verdicts ->
-session folder (epochs, events, latest, home).
+"""The pipeline shared by live mode and replay: NMEA lines -> epochs -> verdicts -> vision ->
+navigation state and guidance (Phase 3) -> session folder (epochs, events, latest, home).
 
     gnss-guardian replay FILE.nmea --out session/NAME [--speed 0|1|N] [--home lat,lon]
                                    [--video video.avi [--frames frames.csv]]
@@ -20,6 +20,7 @@ from gnss_guardian.home import HomeSetter
 from gnss_guardian.io.epochs import EpochBuilder
 from gnss_guardian.io.nmea import split_prefix
 from gnss_guardian.session import SessionWriter
+from gnss_guardian.state import StateMachine
 from gnss_guardian.vision.nav import VisionNav
 
 DETECTORS = ("jamming", "spoofing")
@@ -33,10 +34,12 @@ class Pipeline:
         self._home_vision = None
         self.builder = EpochBuilder(cfg)
         self.engine = DetectionEngine(cfg)
+        self.state = StateMachine(cfg, camera=vision is not None)
         self.home = HomeSetter(cfg, home)
         self.writer = writer
         self.echo = echo or (lambda s: None)
         self.transitions: list[dict] = []
+        self.states: list[dict] = []
         self.counts = {"epochs": 0, **{f"{d}_alarm_epochs": 0 for d in DETECTORS},
                        **{f"{d}_suspect_epochs": 0 for d in DETECTORS}}
         self._warm = True
@@ -61,6 +64,9 @@ class Pipeline:
             if vel is not None:
                 self.engine.observe_vision(*vel)
         v = self.engine.update(ep)
+        if self.state.gnss_blocked and v["gnss_trusted"]:
+            v["gnss_trusted"] = False                # spoof latch held until GNSS and the camera agree
+            v["trust_blocked"] = "spoof latch: waiting for GNSS and camera to agree"
         t = epoch_time(ep)
         new_home = self.home.update(v, t)
         if new_home:
@@ -93,8 +99,31 @@ class Pipeline:
                 self.echo(f"{v['t_gnss']}  {d:<8} -> {lvl:<7} {v[d]['score']:.2f}  {'; '.join(v[d]['reasons'])}")
         if self.vision is not None:
             self._vision_step(t, v)
+        self._state_step(t, v)
         self.writer.epoch(v)
         return v
+
+    def _state_step(self, t: float, v: dict) -> None:
+        out = self.state.update(t, v, v.get("vision"), self.vision.breadcrumbs() if self.vision else None)
+        v.update(state=out["state"], cause=out["cause"], fused=out["fused"], guidance=out["guidance"],
+                 latch=out["latch"])
+        if out["release_spoofing"]:
+            self.engine.release_spoofing()
+        if out["escalated"]:
+            self.writer.event("alarm_escalated", t_gnss=v["t_gnss"], seq=v["seq"], cause=out["cause"],
+                              reasons=v["spoofing"]["reasons"])
+        if out["changed"]:
+            tr = {"t_gnss": v["t_gnss"], "mono": v["mono"], "seq": v["seq"], "state": out["state"],
+                  "from": out["previous"], "cause": out["cause"], "reasons": out["reasons"], "fused": out["fused"],
+                  "guidance": out["guidance"]}
+            self.states.append(tr)
+            self.writer.event("state", **tr)
+            self.echo(f"{v['t_gnss']}  state    -> {out['state']:<12} {'; '.join(out['reasons'])}")
+        if out["route"] is not None:
+            self.writer.event("guidance", t_gnss=v["t_gnss"], seq=v["seq"], route=out["route"],
+                              note="advisory: reverse breadcrumb path to home, newest keyframe first")
+        for w in out["passed"]:
+            self.writer.event("waypoint", t_gnss=v["t_gnss"], seq=v["seq"], id=w["id"], e=w["e"], n=w["n"])
 
     def _vision_step(self, t: float, v: dict) -> None:
         nav = self.vision
@@ -107,7 +136,10 @@ class Pipeline:
             if kf.home:
                 self.echo(f"{v['t_gnss']}  home keyframe stored ({len(kf.pts)} features)")
         nav.new_keyframes.clear()
-        if st["home_confirmed"] and st["home_confirmed"] != self._home_vision:
+        if v["gnss_trusted"]:
+            self._home_vision = None
+        elif st["home_confirmed"] and self._home_vision is None and \
+                t - st["home_confirmed"]["t"] <= self.cfg["state"]["home_match_max_age_s"]:  # first fresh match per denial
             self._home_vision = st["home_confirmed"]
             self.writer.event("home_confirmed", t_gnss=v["t_gnss"], **st["home_confirmed"])
             self.echo(f"{v['t_gnss']}  home keyframe matched: {st['home_confirmed']['offset_m']} m from home")
@@ -118,7 +150,7 @@ class Pipeline:
             if tr["level"] == "ALARM" and tr["detector"] not in first:
                 first[tr["detector"]] = tr["t_gnss"]
         return {**self.counts, "first_alarm": first, "transitions": len(self.transitions),
-                "home": self.home.home}
+                "states": [s["state"] for s in self.states], "home": self.home.home}
 
 
 def replay(path: str | Path, cfg: dict, out: str | Path, speed: float = 0.0,

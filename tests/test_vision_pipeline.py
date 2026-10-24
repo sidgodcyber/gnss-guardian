@@ -45,13 +45,20 @@ def test_camera_sources(cfg, synth_session):
 
 
 def _vision_rows(path):
-    return [v for v in read_jsonl(path) if v.get("vision") and v["vision"]["e"] is not None and v["enu_m"]]
+    """Epochs with both positions, once the camera heading is aligned to the GNSS course (before that
+    the track runs in an arbitrary direction and is not used for anything)."""
+    return [v for v in read_jsonl(path) if v.get("vision") and v["vision"]["e"] is not None and v["enu_m"]
+            and v["vision"]["aligned"]]
 
 
-def test_replay_with_video_clean(cfg, synth_session, tmp_path):
+def test_replay_with_video_clean_stays_gnss_ok(cfg, synth_session, tmp_path):
     c = fast_vision_cfg(cfg)
     s = replay(synth_session / "nmea.nmea", c, tmp_path / "s", video=synth_session / "video.avi")
     assert s["spoofing_suspect_epochs"] == 0 and s["spoofing_alarm_epochs"] == 0 and s["jamming_alarm_epochs"] == 0
+    assert s["states"] == ["WARMING_UP", "GNSS_OK"]                      # the state machine never leaves GNSS_OK
+    eps = read_jsonl(tmp_path / "s" / "epochs.jsonl")
+    assert all(v["fused"]["source"] == "gnss" and v["guidance"] is None for v in eps if v["state"] == "GNSS_OK"
+               and v["enu_m"])
     assert s["frames"] > 1000 and s["keyframes"] >= 10
     rows = _vision_rows(tmp_path / "s" / "epochs.jsonl")
     d = sorted(math.hypot(v["vision"]["e"] - v["enu_m"][0], v["vision"]["n"] - v["enu_m"][1]) for v in rows)

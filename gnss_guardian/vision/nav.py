@@ -164,6 +164,12 @@ class VisionNav:
                 return None
             return self.vo.velocity()
 
+    def breadcrumbs(self) -> list[tuple[int, float, float, bool]]:
+        """(id, e, n, home) of the stored keyframes in storage order: the path walked while GNSS was
+        trusted, which the return-home guidance reverses."""
+        with self._lock:
+            return [(k.id, k.e, k.n, k.home) for k in self.map.keyframes]
+
     def state(self, at: float | None = None) -> dict:
         """Vision state; e/n at time ``at`` (e.g. the GNSS epoch, so the two can be compared) when
         given, else at the latest frame."""

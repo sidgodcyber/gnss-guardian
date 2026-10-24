@@ -4,6 +4,7 @@
   CLEAR -> SUSPECT         score >= suspect_on
   ALARM -> SUSPECT         score < alarm_off for alarm_hold_s, and the alarm is at least min_alarm_s old
   SUSPECT -> CLEAR         score < suspect_off for suspect_hold_s
+  any -> CLEAR             release() (Phase 3: the state machine saw GNSS and the camera agree)
 """
 from __future__ import annotations
 
@@ -18,10 +19,15 @@ class Hysteresis:
         self._k = 0
         self._below: float | None = None
         self._alarm_since: float | None = None
+        self._reported = CLEAR
+
+    def release(self) -> None:
+        """Drop to CLEAR now, latch or not; the next update() reports the change."""
+        self.level, self._k, self._below, self._alarm_since = CLEAR, 0, None, None
 
     def update(self, score: float, t: float) -> tuple[str, bool]:
         """(level, changed) after this epoch's score at time t (seconds)."""
-        h, before = self.h, self.level
+        h, before = self.h, self._reported
         self._k = self._k + 1 if score >= h["alarm_on"] else 0
         if self.level == ALARM:
             if score < h["alarm_off"]:
@@ -42,4 +48,5 @@ class Hysteresis:
                     self.level, self._below = CLEAR, None
             else:
                 self._below = None
+        self._reported = self.level
         return self.level, self.level != before

@@ -1,15 +1,16 @@
 """Dashboard replay file: one dashboard.json per session, written at the end of `replay`.
 
     session/<name>/dashboard.json         timeline (one row per second), state transitions, detector
-                                          level changes, keyframes, events, indicator config
+                                          level changes, keyframes, return-home routes, events, indicator config
     session/<name>/dashboard_video.webm   the session video re-encoded for the browser (VP8), when
                                           replay ran with --video; rows carry the frame index
 
 Positions are local metres from the home point (east, north). No latitude, longitude or altitude is
 written: rows are built from an explicit list of fields.
 
-The Phase 3 state machine does not exist yet, so the state shown is derived from what the pipeline
-does produce (see derive_state): RETURN_HOME and HOME_REACHED are never emitted.
+The state, fused position, guidance and spoof-latch progress are copied from epochs.jsonl as the
+pipeline's state machine (gnss_guardian/state.py) wrote them; nothing is re-derived here. Transition
+reasons come from the "state" events.
 """
 from __future__ import annotations
 
@@ -20,32 +21,12 @@ from pathlib import Path
 
 from gnss_guardian.session import read_jsonl
 
-FORMAT = "gnss-guardian-dashboard/1"
-STATE_SOURCE = ("derived from detector levels and vision mode: SPOOFED / JAMMED on ALARM (VISION_NAV while the "
-                "camera dead-reckons), SUSPECT on any SUSPECT, GNSS_OK otherwise; none during warm-up. "
-                "RETURN_HOME / HOME_REACHED need the Phase 3 state machine (not implemented).")
+FORMAT = "gnss-guardian-dashboard/2"
+STATE_SOURCE = "pipeline state machine (gnss_guardian/state.py), read from epochs.jsonl"
 FEATURES = ("drop_frac", "mean_drop_db", "lost_frac", "hdop_ratio", "fix_lost", "implied_speed_mps", "sog_mps",
             "time_jump_s", "alt_rate_mps", "cn0_std", "newcomer_frac", "vision_diff_mps", "vision_drift_mps")
 VISION = ("mode", "e", "n", "heading", "aligned", "quality", "n_inliers", "flag", "v_e", "v_n", "keyframes",
           "home_dist_m")
-
-
-def detection_state(v: dict) -> str | None:
-    if v.get("warming_up"):
-        return None
-    j, s = v["jamming"]["level"], v["spoofing"]["level"]
-    if "ALARM" in (j, s):
-        return "SPOOFED" if s == "ALARM" else "JAMMED"
-    if "SUSPECT" in (j, s):
-        return "SUSPECT"
-    return "GNSS_OK"
-
-
-def derive_state(v: dict) -> str | None:
-    st = detection_state(v)
-    if st in ("SPOOFED", "JAMMED") and (v.get("vision") or {}).get("mode") == "dead_reckoning":
-        return "VISION_NAV"
-    return st
 
 
 def indicator_config(cfg: dict) -> dict:
@@ -99,12 +80,12 @@ def _detector(d: dict) -> dict:
             "reasons": d["reasons"]}
 
 
-def _row(v: dict, t: float, state: str | None) -> dict:
+def _row(v: dict, t: float) -> dict:
     f = v.get("features") or {}
     vis = v.get("vision")
     enu = v.get("enu_m")
     return {
-        "t": _r(t), "t_gnss": v.get("t_gnss"), "seq": v.get("seq"), "state": state,
+        "t": _r(t), "t_gnss": v.get("t_gnss"), "seq": v.get("seq"), "state": v.get("state"), "cause": v.get("cause"),
         "warming_up": v.get("warming_up"), "gnss_trusted": v.get("gnss_trusted"),
         "gnss": {"fix_valid": v.get("fix_valid"), "sats_used": f.get("n_used"), "sats_tracked": f.get("n_tracked"),
                  "hdop": v.get("hdop"), "cn0_mean": _r(f.get("cn0_mean"), 1),
@@ -112,6 +93,7 @@ def _row(v: dict, t: float, state: str | None) -> dict:
         "jamming": _detector(v["jamming"]), "spoofing": _detector(v["spoofing"]),
         "features": {k: _r(f.get(k)) if not isinstance(f.get(k), bool) else f.get(k) for k in FEATURES},
         "vision": {k: vis.get(k) for k in VISION} if vis else None,
+        "fused": v.get("fused"), "guidance": v.get("guidance"), "latch": v.get("latch"),
         "frame": None,
     }
 
@@ -172,45 +154,48 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
     host = [_host_t(v) for v in epochs]
     t0 = next((t for t in host if t is not None), 0.0)
     rel = [None if t is None else t - t0 for t in host]
-    by_gnss = {}
+    by_gnss, by_seq = {}, {}
     for v, t in zip(epochs, rel):
         by_gnss.setdefault(v.get("t_gnss"), t)
+        by_seq.setdefault(v.get("seq"), t)
+    state_events = {e["seq"]: e for e in events if e["kind"] == "state"}
 
     timeline, transitions, levels = [], [], []
     prev_state, last_row_t = "__start__", None
-
-    def transition(v, t, state):
-        active = [d for d in ("jamming", "spoofing") if v[d]["level"] != "CLEAR"]
-        transitions.append({"t": _r(t), "t_gnss": v.get("t_gnss"), "state": state,
-                            "from": None if prev_state == "__start__" else prev_state,
-                            "reasons": [r for d in active for r in v[d]["reasons"]],
-                            "indicators": [f"{d}.{k}" for d in active for k, p in v[d]["parts"].items() if p and p > 0]})
-
     for v, t in zip(epochs, rel):
         if t is None:
             continue
-        state = derive_state(v)
+        state = v.get("state")
         if state != prev_state:
-            if state == "VISION_NAV" and prev_state not in ("JAMMED", "SPOOFED"):
-                transition(v, t, detection_state(v))      # the alarm and the switch to vision share an epoch
-                prev_state = detection_state(v)
-            transition(v, t, state)
+            active = [d for d in ("jamming", "spoofing") if v[d]["level"] != "CLEAR"]
+            transitions.append({"t": _r(t), "t_gnss": v.get("t_gnss"), "state": state,
+                                "from": None if prev_state == "__start__" else prev_state, "cause": v.get("cause"),
+                                "reasons": state_events.get(v.get("seq"), {}).get("reasons", []),
+                                "indicators": [f"{d}.{k}" for d in active for k, p in v[d]["parts"].items() if p and p > 0]})
             prev_state = state
         for d in ("jamming", "spoofing"):
             if v[d].get("changed"):
                 levels.append({"t": _r(t), "t_gnss": v.get("t_gnss"), "detector": d, "level": v[d]["level"],
                                "score": _r(v[d]["score"]), "reasons": v[d]["reasons"]})
         if last_row_t is None or t - last_row_t >= 0.9:    # about one row per second at 1/5/10 Hz
-            timeline.append(_row(v, t, state))
+            timeline.append(_row(v, t))
             last_row_t = t
 
-    keyframes, other = [], []
+    keyframes, routes, other = [], [], []
     for ev in events:
-        t = by_gnss.get(ev.get("t_gnss"))
+        t = by_seq.get(ev["seq"]) if ev.get("seq") is not None else by_gnss.get(ev.get("t_gnss"))
         t = _r(t) if t is not None else None
         kind = ev["kind"]
         if kind == "keyframe":
             keyframes.append({"t": t, "id": ev["id"], "e": ev["e"], "n": ev["n"], "home": ev.get("home", False)})
+        elif kind == "guidance":
+            routes.append({"t": t, "waypoints": ev["route"]})
+            other.append({"t": t, "kind": kind, "detail": f"return-home route: {len(ev['route'])} waypoints "
+                                                          f"back along the stored keyframes (advisory)"})
+        elif kind == "waypoint":
+            other.append({"t": t, "kind": kind, "detail": f"passed waypoint {ev['id']} ({ev['e']}, {ev['n']} m)"})
+        elif kind == "alarm_escalated":
+            other.append({"t": t, "kind": kind, "detail": f"alarm cause now {ev['cause']}: {'; '.join(ev['reasons'])}"})
         elif kind == "home_set":
             other.append({"t": t, "kind": kind, "detail": f"home point set ({ev.get('source', 'unknown')})"})
         elif kind == "home_confirmed":
@@ -220,7 +205,7 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
             other.append({"t": t, "kind": kind, "detail": "baseline ready, detection active"})
         elif kind == "antenna":
             other.append({"t": t, "kind": kind, "detail": f"antenna {ev.get('status')} (was {ev.get('previous')})"})
-        elif kind != "level":
+        elif kind not in ("level", "state"):
             other.append({"t": t, "kind": kind, "detail": kind})
 
     meta = {"source": info.get("source"), "mode": info.get("mode"), "created_utc": info.get("created_utc"),
@@ -242,7 +227,8 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
             row["frame"] = i if times and times[0] <= target else None
 
     return {"format": FORMAT, "meta": meta, "config": indicator_config(cfg), "timeline": timeline,
-            "transitions": transitions, "detector_levels": levels, "keyframes": keyframes, "events": other}
+            "transitions": transitions, "detector_levels": levels, "keyframes": keyframes, "routes": routes,
+            "events": other}
 
 
 def write_dashboard_json(session: str | Path, cfg: dict, **kw) -> Path:

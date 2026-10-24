@@ -2,8 +2,8 @@
 
     gnss-guardian status --data session/live          # one line per second, Ctrl-C to stop
 
-    14:00:05 IST | GNSS TRUSTED | fix 9/11 | C/N0 38.4 sd 5.0 | HDOP 0.9 | jam CLEAR 0.00 | spoof CLEAR 0.05 | home 12 m | age 0.4 s
-    14:02:09 IST | GNSS denied: jamming or blockage | fix lost | ... | jam ALARM 0.94 (C/N0 down >= 6 dB on 12/12 satellites; ...)
+    14:00:05 IST | GNSS TRUSTED | GNSS_OK | fix 9/11 | C/N0 38.4 sd 5.0 | HDOP 0.9 | jam CLEAR 0.00 | spoof CLEAR 0.05 | home 12 m at 270 deg (gnss) | age 0.4 s
+    14:02:09 IST | GNSS denied: jamming or blockage | RETURN_HOME | fix lost | ... | home 9 m at 268 deg (vision) | next waypoint 4: 1.8 m at 270 deg
     14:05:30 IST | STALE: last epoch 12 s old (receiver silent or live mode stopped) | GNSS UNKNOWN | last: fix 9/11 | ...
 """
 from __future__ import annotations
@@ -50,14 +50,22 @@ def status_line(folder: str | Path, tz: str = "Asia/Kolkata", now: datetime | No
     fix = f"fix {f['n_used']}/{f['n_tracked']}" if v["fix_valid"] else f"fix lost ({f['n_tracked']} tracked)"
     cn0 = (f"C/N0 {f['cn0_mean']:.1f} sd {f['cn0_std'] or 0:.1f}" if f.get("cn0_mean") is not None else "C/N0 -")
     hdop = f"HDOP {v['hdop']:.1f}" if v.get("hdop") is not None else "HDOP -"
-    parts = [fix, cn0, hdop]
+    parts = [v.get("state") or "-", fix, cn0, hdop]
     for d, short in (("jamming", "jam"), ("spoofing", "spoof")):
         s = f"{short} {v[d]['level']} {v[d]['score']:.2f}"
         if v[d]["level"] != "CLEAR" and v[d]["reasons"]:
             s += f" ({'; '.join(v[d]['reasons'])})"
         parts.append(s)
-    if v.get("enu_m"):
+    fu, g = v.get("fused"), v.get("guidance")
+    if fu:
+        parts.append(f"home {fu['home_distance_m']:.0f} m at {fu['home_bearing_deg']:.0f} deg ({fu['source']})")
+    elif v.get("enu_m"):
         parts.append(f"home {math.hypot(*v['enu_m']):.0f} m")
+    if g:                                            # advisory guidance only: the module commands nothing
+        w = g["waypoint"]
+        parts.append(f"next waypoint {w['id']}: {w['distance_m']:.1f} m at {w['bearing_deg']:.0f} deg")
+    if v.get("latch") and not v["latch"]["agreeing"]:
+        parts.append(f"spoof latch: {v['latch']['detail']}")
     if v.get("antenna") not in (None, "OK"):
         parts.append(f"ANTENNA {v['antenna']}")
     if stale:

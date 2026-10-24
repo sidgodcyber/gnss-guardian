@@ -3,6 +3,7 @@
     eng = DetectionEngine(cfg)
     v = eng.update(epoch)                 # features, jamming + spoofing score/level/reasons
     eng.observe_vision(mono, v_e, v_n, q) # Phase 2: camera velocity (on-board only)
+    eng.release_spoofing()                # Phase 3: GNSS and the camera agreed, drop the spoof latch
 
 GNSS is trusted only when the baseline is warm, the fix is valid and both detectors are CLEAR.
 The baseline grows only from epochs that both detectors call clean.
@@ -52,6 +53,11 @@ class DetectionEngine:
     def observe_vision(self, mono: float, v_e: float, v_n: float, quality: float) -> None:
         """Latest camera velocity (east/north m/s) with its quality 0-1 (Phase 2)."""
         self._vision = (mono, v_e, v_n, quality)
+
+    def release_spoofing(self) -> None:
+        """The state machine saw GNSS and the camera agree for state.spoof_release.agree_s: end the
+        spoofing alarm now instead of after min_alarm_s. A spoof still present re-alarms as usual."""
+        self.h_spoof.release()
 
     def update(self, ep: Epoch) -> dict:
         f = self.features.compute(ep, self._vision)
