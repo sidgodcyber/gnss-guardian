@@ -46,6 +46,8 @@ class FlowTracker:
         self._skipped = 0
         self._m_frame: np.ndarray | None = None      # last per-frame motion (3x3, processing pixels)
         self._orb = None
+        self.last_pairs: tuple[np.ndarray, np.ndarray] | None = None   # inlier (previous, current) points,
+                                                                       # full-resolution pixels (overlay)
 
     def _prep(self, gray: np.ndarray) -> np.ndarray:
         if gray.ndim == 3:
@@ -133,6 +135,7 @@ class FlowTracker:
         if self.scale != 1.0:
             m = m.copy()
             m[:, 2] /= self.scale
+        self.last_pairs = (a[inl][:150] / self.scale, b[inl][:150] / self.scale)
         return FlowResult(ok=True, m=m, n_tracked=len(mt), n_inliers=ni, inlier_ratio=ni / len(mt),
                           residual_px=resid, quality=quality, orb=True)
 
@@ -184,5 +187,6 @@ class FlowTracker:
             m = m.copy()
             m[:, 2] /= self.scale
         ok = ni >= v["min_inliers"]
+        self.last_pairs = (a[inl][:150] / self.scale, b[inl][:150] / self.scale) if ok else None
         return (FlowResult(ok=ok, m=m, n_tracked=n, n_inliers=ni, inlier_ratio=ratio, residual_px=resid,
                            quality=quality if ok else 0.0), b[inl].reshape(-1, 1, 2))

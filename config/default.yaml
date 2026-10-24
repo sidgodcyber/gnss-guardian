@@ -104,6 +104,12 @@ l86:
   antenna_status: true           # send PGCMD,33,1 on open: MTK modules then report PGTOP,11,x every fix (the
                                  #   GPTXT ANTSTATUS banner appears only at power-up). Not yet verified on our L86.
 
+overlay:                         # live --overlay PORT: camera overlay (MJPEG), guidance page, live.json
+  fps: 5                         # overlay frames per second (320x240), drawn in their own thread
+  min_fps: 1                     # ... lowered toward this whenever the camera thread runs below
+  protect_vision_frac: 0.9       #     this fraction of camera.fps: the overlay gives way, not the vision
+  jpeg_quality: 70
+
 live:
   reconnect_s: 2                 # serial retry interval after unplug / open failure
   silence_reopen_s: 10           # no bytes for this long (wall s): event no_serial_data and reopen the port

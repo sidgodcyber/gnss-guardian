@@ -55,6 +55,7 @@ class VisionNav:
         self._home_given = False                    # home from the command line: the rig may be elsewhere
         self._best_features = 0
         self._frames = 0
+        self._last_gray = None
         self._last_gnss_t: float | None = None
         self._courses: deque = deque(maxlen=3)      # (t, course) of recent moving trusted epochs
         self.last_match = None
@@ -67,6 +68,7 @@ class VisionNav:
     def on_frame(self, t: float, gray) -> dict:
         with self._lock:
             self._frames += 1
+            self._last_gray = gray                  # the overlay thread draws on the processed frame
             st = self.vo.step(t, gray)
             pos = self._position()
             if self._want_home_kf:
@@ -239,6 +241,15 @@ class VisionNav:
             if a is None or b is None:
                 return None
             return b[0] - a[0], b[1] - a[1], self.vo.aligned, self.vo.mean_quality(t0, t1)
+
+    def overlay_snapshot(self) -> dict:
+        """Newest processed frame and what to draw on it (the frame array is never modified in place)."""
+        with self._lock:
+            pos = self._position()
+            return {"gray": self._last_gray, "pairs": self.vo.flow.last_pairs, "t": self.vo._last_t,
+                    "heading": self.vo.heading, "aligned": self.vo.aligned, "flag": self.vo.last["flag"],
+                    "quality": self.vo.last["quality"], "pos": pos, "trusted": self._trusted,
+                    "keyframes": len(self.map.keyframes), "home_match": self.home_match}
 
     def breadcrumbs(self) -> list[tuple[int, float, float, bool]]:
         """(id, e, n, home) of the stored keyframes in storage order: the path walked while GNSS was

@@ -3,6 +3,7 @@
     python -m gnss_guardian.cli live --l86 /dev/serial0 --out session/live [--rate 1|5|10]
                                      [--l86-constellations gps,glonass,galileo] [--home lat,lon]
                                      [--camera auto|picam|usb:N|video:FILE | --no-camera]
+                                     [--overlay PORT [--overlay-record] [--demo-inject]]
     python -m gnss_guardian.cli replay FILE.nmea|FOLDER --out session/NAME [--speed 0] [--home lat,lon]
                                        [--video video.avi [--frames frames.csv | --video-start ISO]]
     python -m gnss_guardian.cli status --data session/live
@@ -57,14 +58,24 @@ def cli():
 @click.option("--duration-s", default=None, type=float, help="Stop after this many wall seconds.")
 @click.option("--camera", default=None, help="auto | picam | usb:N | video:FILE (default: config camera.source).")
 @click.option("--no-camera", is_flag=True, help="GNSS detection only.")
-def live(port, baud, rate, l86_constellations, out, home, config_path, clock_scale, duration_s, camera, no_camera):
+@click.option("--overlay", "overlay_port", default=None, type=click.IntRange(0, 65535), metavar="PORT",
+              help="Serve the camera overlay (MJPEG at /), the guidance page (/guide) and /live.json on this port.")
+@click.option("--overlay-record", is_flag=True, help="Also save the overlay to session/NAME/overlay.mp4.")
+@click.option("--demo-inject", is_flag=True,
+              help="Demo only: inject a software spoof (jump / drift) into the NMEA before the detector, from "
+                   "buttons on the guidance page. Needs --overlay.")
+def live(port, baud, rate, l86_constellations, out, home, config_path, clock_scale, duration_s, camera, no_camera,
+         overlay_port, overlay_record, demo_inject):
     """Read the L86 (and the camera) live: detection every fix, vision navigation every frame."""
     from gnss_guardian.io.serial_live import run_live
+    if demo_inject and overlay_port is None:
+        raise click.UsageError("--demo-inject needs --overlay PORT (its controls are on the guidance page)")
     cfg = load_config(config_path)
     names = [c.strip().lower() for c in l86_constellations.split(",")] if l86_constellations else None
     s = run_live(port, baud, out, cfg, rate=rate, constellations=names, clock_scale=clock_scale,
                  duration_s=duration_s, home=_home(home),
-                 camera=None if no_camera else (camera or cfg["camera"]["source"]))
+                 camera=None if no_camera else (camera or cfg["camera"]["source"]),
+                 overlay_port=overlay_port, overlay_record=overlay_record, demo_inject=demo_inject, echo=click.echo)
     click.echo(f"epochs {s['epochs']}, first alarms {s['first_alarm'] or '-'}")
     click.echo(f"states: {' -> '.join(s['states']) or '-'}")
 
@@ -157,7 +168,8 @@ def calibrate(video, distance, height, dry_run, config_path):
 @click.option("--frames", "n", default=300, show_default=True, type=int)
 @click.option("--scale", default=None, type=float, help="Override vision.process_scale (e.g. 0.5).")
 @click.option("--threads", default=None, type=int, help="OpenCV threads (default: all cores).")
-def vision_bench(video, n, scale, threads):
+@click.option("--overlay", is_flag=True, help="Run twice: without, then with the live overlay thread rendering.")
+def vision_bench(video, n, scale, threads, overlay):
     """Measure the vision frame rate on this machine (run it on the laptop and on the Pi)."""
     import cv2
 
@@ -177,8 +189,10 @@ def vision_bench(video, n, scale, threads):
             if not ok:
                 break
             frames.append(_fit(img, cfg["camera"]["width"], cfg["camera"]["height"]))
-    r = bench.run(cfg, frames, n)
-    click.echo(" | ".join(f"{k} {v}" for k, v in r.items()))
+    for ov in ((False, True) if overlay else (False,)):
+        r = bench.run(cfg, frames, n, overlay=ov)
+        click.echo(("with overlay    " if ov else "without overlay " if overlay else "") +
+                   " | ".join(f"{k} {v}" for k, v in r.items()))
 
 
 def main():

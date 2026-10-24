@@ -50,7 +50,7 @@ class PiCamera:
             raise CameraUnavailable("Picamera2 is only available on Raspberry Pi OS (sudo apt install "
                                     "python3-picamera2, venv with --system-site-packages); on a laptop use "
                                     "--camera usb:0 or --video FILE") from e
-        self.w, self.h, self.clock = width, height, clock
+        self.w, self.h, self.clock, self.fps = width, height, clock, fps
         self.cam = Picamera2()
         frame_us = int(1e6 / fps)
         conf = self.cam.create_video_configuration(main={"size": (width, height), "format": "YUV420"},

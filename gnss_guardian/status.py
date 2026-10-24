@@ -19,8 +19,8 @@ from zoneinfo import ZoneInfo
 STALE_S = 5
 
 
-def _latest(folder: Path) -> tuple[dict | None, float | None]:
-    p = folder / "latest.json"
+def _latest(folder: Path, name: str = "latest.json") -> tuple[dict | None, float | None]:
+    p = folder / name
     if not p.exists() or p.stat().st_size == 0:
         return None, None
     try:
@@ -75,6 +75,10 @@ def status_line(folder: str | Path, tz: str = "Asia/Kolkata", now: datetime | No
         parts.append(f"spoof latch: {v['latch']['detail']}")
     if v.get("antenna") not in (None, "OK"):
         parts.append(f"ANTENNA {v['antenna']}")
+    live, _ = _latest(folder, "live.json")
+    inj = ((live or {}).get("injection") or {}).get("active")
+    if inj:                                          # demo only: never let it pass for a real attack
+        parts.insert(0, f"DEMO INJECTION ACTIVE ({inj['type']}, {inj['offset_m']} m)")
     if stale:
         return (f"{clock} | STALE: last epoch {age:.0f} s old (receiver silent or live mode stopped) | {head} | "
                 f"last: {' | '.join(parts)}"), True

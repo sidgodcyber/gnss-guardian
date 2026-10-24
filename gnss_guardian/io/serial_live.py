@@ -5,10 +5,16 @@ Reused from IonWatch live mode: reconnect after unplug/open failure, reopen afte
 partial-line and garbage handling, raw NMEA log with host-time prefix, and the PMTK rate setup
 (PMTK251 baud, PMTK314 sentences, PMTK220 fix interval, measured rate with fallback to 1 Hz).
 New: PMTK353 to enable Galileo (verified by GAGSV appearing), PGCMD,33,1 for periodic antenna
-status, epoch-level output, no_data events, optional camera thread (vision navigation).
+status, epoch-level output, no_data events, optional camera thread (vision navigation), live.json
+every epoch, and with --overlay PORT a display server (camera overlay stream, guidance page) and
+with --demo-inject software spoof injection into the NMEA stream before the detector.
 
     gnss-guardian live --l86 /dev/serial0 [--rate 1|5|10] [--l86-constellations gps,glonass,galileo]
                        [--camera auto|picam|usb:N|video:FILE | --no-camera] --out session/NAME [--home lat,lon]
+                       [--overlay PORT [--overlay-record] [--demo-inject]]
+
+Demo injection: raw/ keeps the NMEA exactly as received; detector_input/ the stream the detector saw
+(raw plus the injected offsets); every start/stop is a demo_inject event.
 
 Time: mono = time.monotonic() x clock_scale (clock_scale > 1 only to pair with a fast simulator).
 No network is used: the port is a device or the pyserial URL the user passes.
@@ -18,11 +24,13 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
+from gnss_guardian.livehub import LiveHub
 from gnss_guardian.run import Pipeline
-from gnss_guardian.session import SessionWriter
+from gnss_guardian.session import SessionWriter, utc_now
 
 log = logging.getLogger("gnss_guardian.live")
 
@@ -172,6 +180,7 @@ class CameraThread(threading.Thread):
         self.stop = threading.Event()
         self.frames = 0
         self.fps: float | None = None
+        self.target_fps: float | None = getattr(source, "fps", None)     # the source's own frame rate
         self.error: str | None = None
 
     def run(self):
@@ -213,12 +222,42 @@ def start_camera(spec: str, cfg: dict, out_dir: Path, writer, clock):
     return nav, th
 
 
+def start_display(cfg: dict, hub: LiveHub, nav, writer, out_dir: Path, port: int | None, record: bool,
+                  cam_thread, on_inject, echo):
+    """(server, overlay thread); either is None when not wanted or not possible. Display only: a
+    failure here is logged and live mode carries on."""
+    from gnss_guardian.overlay import OverlayThread
+    server = None
+    if port is not None:
+        from gnss_guardian.web.server import LiveServer
+        server = LiveServer(hub, port, on_inject=on_inject)
+        if server.start():
+            urls = server.urls()
+            writer.event("display_server", port=server.port, **urls)
+            echo(f"overlay stream  {urls['overlay']}")
+            echo(f"guidance page   {urls['guide']}")
+            echo(f"live.json       {urls['live_json']}")
+        else:
+            writer.event("overlay_unavailable", port=port, error=server.error)
+            server = None
+    ov = None
+    if server is not None or record:
+        ov = OverlayThread(cfg, hub, nav, record=out_dir / "overlay.mp4" if record else None,
+                           camera_fps=lambda: cam_thread.fps if cam_thread else None,
+                           camera_target_fps=cam_thread.target_fps if cam_thread else None)
+        ov.start()
+    return server, ov
+
+
 def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellations: list[str] | None = None,
              clock_scale: float = 1.0, duration_s: float | None = None, home=None, echo=print,
-             camera: str | None = None) -> dict:
+             camera: str | None = None, overlay_port: int | None = None, overlay_record: bool = False,
+             demo_inject: bool = False) -> dict:
     """Read NMEA from ``port`` (/dev/serial0, COM3, or a pyserial URL such as socket://127.0.0.1:5000)
     until stopped or ``duration_s`` wall seconds. Returns the pipeline summary."""
     import serial
+
+    from gnss_guardian.inject import DemoInjector
 
     out_dir = Path(out_dir)
     setup_logging(out_dir, "live.log")
@@ -231,6 +270,18 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
         nav, cam_thread = start_camera(camera, cfg, out_dir, writer, lambda: time.monotonic() * clock_scale)
     pipe = Pipeline(cfg, writer, home, echo=lambda s: log.info(s), vision=nav)
     raw = RawNmeaLog(out_dir / "raw")
+    injector = DemoInjector() if demo_inject else None
+    det_raw = RawNmeaLog(out_dir / "detector_input") if injector else None
+    pending_events: deque = deque()                 # from the display server's thread, logged by this one
+
+    def on_inject(kind, result):
+        pending_events.append(("demo_inject", {"action": kind, "at_utc": utc_now(), **(result or {})}))
+
+    hub = LiveHub(cfg, out_dir, injector, vision_fps=lambda: cam_thread.fps if cam_thread else None)
+    server, overlay = start_display(cfg, hub, nav, writer, out_dir, overlay_port, overlay_record, cam_thread,
+                                    on_inject, echo)
+    if injector:
+        writer.event("demo_inject_enabled", note="software injection before the detector; raw/ is unmodified")
     setup = L86RateSetup(rate, baud, lv["rate_measure_s"], cmd353, cfg["l86"]["antenna_status"])
     want_galileo = bool(constellations) and "galileo" in constellations
     galileo_t0, galileo_done, n_acks = None, False, 0
@@ -243,9 +294,21 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
     def mono():
         return time.monotonic() * clock_scale     # the camera frames use the same clock
 
+    def drain_events():
+        while pending_events:
+            kind, data = pending_events.popleft()
+            writer.event(kind, **data)
+            log.warning("DEMO INJECTION %s: %s", data["action"], {k: x for k, x in data.items() if k != "action"})
+        if overlay is not None:
+            for kind, data in overlay.events:
+                writer.event(kind, **data)
+            overlay.events.clear()
+
     def handle(verdicts):
         nonlocal last_epoch, no_data_flagged, galileo_t0, galileo_done, ser, pending
+        drain_events()
         for v in verdicts:
+            hub.update(v, nav.breadcrumbs() if nav else None)
             last_epoch = time.monotonic()
             if no_data_flagged:
                 writer.event("data_resumed", t_gnss=v["t_gnss"])
@@ -316,8 +379,13 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
                 for bl in lines:
                     line = bl.decode("ascii", errors="replace").strip()
                     raw.write(line, host)
+                    if injector is not None:              # demo only: the detector sees the modified line
+                        line = injector.apply(line)
+                        det_raw.write(line, host)
                     handle(pipe.feed(line, host, m))
                 raw.flush()
+                if det_raw is not None:
+                    det_raw.flush()
             else:
                 handle(pipe.flush())                    # the burst is over: emit the epoch now
             if len(pipe.builder.parser.acks) > n_acks:
@@ -332,6 +400,15 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
     except KeyboardInterrupt:
         log.info("stopped by user")
     finally:
+        if injector is not None and injector.active is not None:
+            on_inject("stop", injector.stop())
+        if overlay is not None:
+            overlay.stop.set()
+            overlay.join(timeout=2)
+            writer.event("overlay_stopped", frames=overlay.frames, fps=overlay.fps, render_ms=overlay.render_ms,
+                         error=overlay.error)
+        if server is not None:
+            server.close()
         if cam_thread is not None:
             cam_thread.stop.set()
             cam_thread.join(timeout=2)
@@ -339,7 +416,10 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
         if ser is not None:
             ser.close()
         handle(pipe.flush())
+        drain_events()
         writer.close()
         raw.close()
+        if det_raw is not None:
+            det_raw.close()
         log.info("live stopped: %s", pipe.summary())
     return pipe.summary()
