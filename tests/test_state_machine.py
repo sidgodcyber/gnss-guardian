@@ -248,3 +248,12 @@ def test_spoof_walk_returns_home_and_latch_waits_for_agreement(tmp_path, cfg, ou
     d = __import__("json").loads((tmp_path / "s" / "dashboard.json").read_text(encoding="utf-8"))
     assert [t["state"] for t in d["transitions"]] == s["states"] and len(d["routes"]) == 1
     assert any(r["guidance"] for r in d["timeline"]) and any(r["latch"] for r in d["timeline"])
+
+
+def test_clean_walk_no_false_alarm_from_the_displacement_check(tmp_path, cfg, outback):
+    s, eps, ev = run_walk(tmp_path, cfg, outback, 95)
+    drift = [v["features"]["vision_pos_drift_m"] for v in eps if v["features"]["vision_pos_drift_m"] is not None]
+    print(f"clean out-and-back walk: GNSS-vs-camera displacement max {max(drift):.2f} m over {len(drift)} epochs")
+    assert len(drift) > 30 and max(drift) < 1.5
+    assert all(v["spoofing"]["level"] == "CLEAR" and v["jamming"]["level"] == "CLEAR" for v in eps)
+    assert s["states"] == [WARMING_UP, GNSS_OK]

@@ -5,11 +5,11 @@ and obeys the PMTK commands gnss-guardian sends (baud, output rate, sentences, c
                              [--speed 1] [--start 2026-10-22T14:00:00Z] [--duration-s 600]
                              [--walk loop:W:H:MPS | outback:DIST:HEADING:MPS [--still-s S]]
                              [--jam ramp|sudden --jam-at T [--jam-rate-db-s 4] [--jam-depth-db 25]]
-                             [--spoof jump|drift|time --spoof-at T [--jump-m 500] [--drift-mps 1.0]
+                             [--spoof jump|drift|time --spoof-at T [--jump-m 500] [--drift-mps 1.0] [--drift-quiet]
                               [--time-offset-s 30] [--spoof-cn0 uniform|natural]]
                              [--recover-after DUR]
                              [--write FILE [--write-rate HZ]]
-                             [--inject-fade PRN:START:DUR:DEPTH] [--inject-dropout START:DUR]
+                             [--inject-fade PRN:START:DUR:DEPTH] [--inject-dropout START:DUR] [--pos-noise-m SIGMA]
                              [--inject-garbage T[,T...]] [--inject-disconnect START:DUR]
 
 The first stdout line is ``PORT <path-or-url>``; give that to ``gnss-guardian live --l86``:
@@ -32,11 +32,14 @@ Profiles:
   --jam ramp       ... falling at --jam-rate-db-s from --jam-at
   --spoof jump     reported position jumps --jump-m (bearing 45 deg) at --spoof-at
   --spoof drift    reported position drags off at --drift-mps (bearing 60 deg), speed/course follow
+                   (--drift-quiet: speed/course do not follow, like an indoor receiver wandering at "0 m/s")
   --spoof time     reported GNSS time runs --time-offset-s ahead
   every spoof      with --spoof-cn0 uniform (default) the receiver tracks the spoofer's sky: half of
                    each constellation's satellites swapped for PRNs not in view, all at 48 +/- 0.5 dB-Hz;
                    natural keeps the real satellites and C/N0 (kinematic/time signature only)
   --recover-after  the jam/spoof ends DUR s after it began (C/N0 climbs back at 10 dB/s)
+  --pos-noise-m    position wander: Gauss-Markov per axis, this sigma, 30 s time constant
+  --inject-dropout no output at all for DUR s from START (also with --write: a fix gap)
 L86 behaviour:
   PMTK251,<baud>  switch baud (acked at the old baud); the line carries at most baud/10 bytes/s
   PMTK220,<ms>    fix interval -> output rate 1000/ms Hz, capped at --max-rate
@@ -177,6 +180,8 @@ class Scenario:
         self.lost: set = set()
         self.fix_ok_since: float | None = 0.0
         self.has_fix = True
+        self.nrng = random.Random(a.seed + 7)
+        self.noise, self._noise_s = (0.0, 0.0), None
 
     def _end(self, at):
         return at + self.a.recover_after if (at is not None and self.a.recover_after is not None) else None
@@ -213,10 +218,18 @@ class Scenario:
             dd = a.drift_mps * (s - a.spoof_at)
             e += dd * math.sin(math.radians(60))
             n += dd * math.cos(math.radians(60))
-            ve += a.drift_mps * math.sin(math.radians(60))
-            vn += a.drift_mps * math.cos(math.radians(60))
+            if not a.drift_quiet:
+                ve += a.drift_mps * math.sin(math.radians(60))
+                vn += a.drift_mps * math.cos(math.radians(60))
         elif spoof and a.spoof == "time":
             t += timedelta(seconds=a.time_offset_s)
+        if a.pos_noise_m:
+            dt = 1.0 if self._noise_s is None else max(s - self._noise_s, 0.0)
+            self._noise_s = s
+            phi = math.exp(-dt / 30.0)
+            q = a.pos_noise_m * math.sqrt(1 - phi * phi)
+            self.noise = tuple(phi * x + q * self.nrng.gauss(0, 1) for x in self.noise)
+            e, n = e + self.noise[0], n + self.noise[1]
         depth = self.jam_depth(s)
         talkers = [tk for tk in ("GP", "GL", "GA") if tk in c["sats"] and (tk != "GA" or galileo)]
         sky: dict[str, list] = {}
@@ -267,7 +280,7 @@ class Scenario:
             la, ns, lo, ew = _nmea_ll(lat, lon)
             sog = math.hypot(ve, vn) / KNOT
             cog = math.degrees(math.atan2(ve, vn)) % 360 if sog > 0.05 else 0.0
-            if (not a.walk or s < a.still_s) and not (spoof and a.spoof == "drift"):
+            if (not a.walk or s < a.still_s) and not (spoof and a.spoof == "drift" and not a.drift_quiet):
                 sog = 0.02
             out.append(f"GPRMC,{hms},A,{la},{ns},{lo},{ew},{sog:.2f},{cog:.2f},{t:%d%m%y},,,A")
             out.append(f"GPVTG,{cog:.2f},T,,M,{sog:.2f},N,{sog * 1.852:.2f},K,A")
@@ -496,6 +509,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--spoof-at", type=float, default=120.0)
     ap.add_argument("--jump-m", type=float, default=500.0)
     ap.add_argument("--drift-mps", type=float, default=1.0)
+    ap.add_argument("--drift-quiet", action="store_true", help="drift: reported speed/course do not follow")
+    ap.add_argument("--pos-noise-m", type=float, default=0.0, help="position wander sigma (Gauss-Markov, 30 s)")
     ap.add_argument("--time-offset-s", type=float, default=30.0)
     ap.add_argument("--spoof-cn0", choices=["uniform", "natural"], default="uniform")
     ap.add_argument("--recover-after", type=float, default=None, help="the jam/spoof ends DUR s after it began")
@@ -517,8 +532,11 @@ def write_file(a, cycles, start) -> int:
     n = max(1, int(round(a.write_rate)))
     enabled = {"RMC", "GGA", "GSA", "GSV", "VTG"} if n == 1 else {"RMC", "GGA", "GSA", "GSV"}
     rng = random.Random(a.seed + 1)
+    dropout = span(a.inject_dropout)
     lines = []
     for k in range(total):
+        if dropout and dropout[0] <= k < dropout[0] + dropout[1]:
+            continue
         for j in range(n):
             s = k + j / n
             host = start + timedelta(seconds=s + 0.3 + rng.uniform(0, 0.05))

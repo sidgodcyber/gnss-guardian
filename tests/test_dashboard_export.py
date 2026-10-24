@@ -10,7 +10,7 @@ from gnss_guardian.vision.camera import read_frames_csv
 
 
 def run(tmp_path, cfg, name, *args, duration_s=300):
-    nmea = sim_file(tmp_path / f"{name}.nmea", *args, duration_s=duration_s)
+    nmea = sim_file(tmp_path / f"{name}.nmea", "--still-s", "90", *args, duration_s=duration_s)   # home needs a still rig
     replay(nmea, cfg, tmp_path / name)
     return json.loads((tmp_path / name / "dashboard.json").read_text(encoding="utf-8"))
 

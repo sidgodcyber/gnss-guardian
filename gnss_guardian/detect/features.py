@@ -98,12 +98,15 @@ class FeatureExtractor:
         self.vision_max_age = d["spoofing"]["vision_max_age_s"]
         self.vision_window = d["spoofing"]["vision_window_s"]
         self.vision_long = d["spoofing"]["vision_long_window_s"]
+        self.pos_window = d["spoofing"]["vision_pos_window_s"]
+        self._gpos: deque = deque()                  # (t, e, n) of valid fixes, metres from the first fix
+        self._ref: tuple[float, float] | None = None
         self._vdiff: deque = deque()                 # (t, d_east, d_north) GNSS minus vision velocity
         self._gvel: deque = deque(maxlen=10)         # (t, v_east, v_north) of recent valid fixes
         self.baseline = Baseline(cfg)
         self._prev_fix: tuple[float, float, float, float | None] | None = None   # t, lat, lon, alt
 
-    def compute(self, ep: Epoch, vision: tuple | None = None) -> dict:
+    def compute(self, ep: Epoch, vision: tuple | None = None, track=None) -> dict:
         t = epoch_time(ep)
         tracked = ep.tracked()
         cn0s = [s.cn0 for s in tracked.values() if not (s.elev < self.mask)]   # nan elevation kept
@@ -142,10 +145,11 @@ class FeatureExtractor:
         f["n_newcomers"] = len(new)
         f["newcomer_frac"] = (len(new) / len(tracked)) if tracked and known else None
         # kinematics against the previous valid fix
-        f["implied_speed_mps"] = f["alt_rate_mps"] = f["jump_m"] = None
+        f["implied_speed_mps"] = f["alt_rate_mps"] = f["jump_m"] = f["fix_gap_s"] = None
         if ep.fix_valid and self._prev_fix is not None:
             pt, plat, plon, palt = self._prev_fix
             dt = t - pt
+            f["fix_gap_s"] = dt
             if dt > 0:
                 dist = geo.distance_m(plat, plon, ep.lat, ep.lon)
                 f["jump_m"] = dist
@@ -180,7 +184,40 @@ class FeatureExtractor:
                 f["vision_quality"] = q
         else:
             self._vdiff.clear()                      # a gap in the comparison restarts both windows
+        self._displacement(ep, t, f, track)
         return f
+
+    def _displacement(self, ep: Epoch, t: float, f: dict, track) -> None:
+        """GNSS displacement against camera displacement over vision_pos_window_s: the means of the
+        first and last 3 s of fixes, against the camera track between the mean times (``track`` is
+        VisionNav.displacement). Aligned: |difference vector|; not yet aligned: difference of the
+        lengths (a lower bound). A position jump (the speed check's business) restarts the window."""
+        f["vision_pos_drift_m"] = f["vision_pos_quality"] = f["vision_pos_aligned"] = None
+        if not ep.fix_valid:
+            return
+        if self._ref is None:
+            self._ref = (ep.lat, ep.lon)
+        if (f["jump_m"] or 0) > self.slack_m:
+            self._gpos.clear()
+        self._gpos.append((t, *geo.enu(ep.lat, ep.lon, *self._ref)))
+        while self._gpos and self._gpos[0][0] < t - self.pos_window:
+            self._gpos.popleft()
+        if track is None or t - self._gpos[0][0] < self.pos_window - 1.5:
+            return
+        a = [x for x in self._gpos if x[0] <= self._gpos[0][0] + 3]
+        b = [x for x in self._gpos if x[0] >= t - 3]
+        ta, ea, na = (statistics.fmean(c) for c in zip(*a))
+        tb, eb, nb = (statistics.fmean(c) for c in zip(*b))
+        cam = track(ta, tb)
+        if cam is None:
+            return
+        ce, cn, aligned, q = cam
+        if aligned:
+            d = math.hypot(eb - ea - ce, nb - na - cn)
+        else:
+            d = abs(math.hypot(eb - ea, nb - na) - math.hypot(ce, cn))
+        f.update(vision_pos_drift_m=d, vision_pos_quality=q, vision_pos_aligned=aligned,
+                 vision_pos_gnss_m=math.hypot(eb - ea, nb - na), vision_pos_cam_m=math.hypot(ce, cn))
 
     def _mean_diff(self, t: float, window: float) -> float | None:
         """|mean GNSS-minus-vision velocity| over the window, once the samples cover 70 % of it."""

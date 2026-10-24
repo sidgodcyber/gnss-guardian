@@ -11,10 +11,13 @@ States (thresholds and timers in config ``state``):
   SUSPECT       a detector at SUSPECT (GNSS not trusted: the camera track carries the position)
   JAMMED        jamming ALARM               the alarm; from here on the state leaves only through
   SPOOFED       spoofing ALARM              the release rule below
-  VISION_NAV    the camera dead-reckons from the last trusted fix (heading aligned, track not lost)
-  RETURN_HOME   VISION_NAV with a healthy track for return_home_after_s: guidance to home is active
-  HOME_REACHED  camera position within home_radius_m of home, confirmed by a home keyframe match
-                no older than home_match_max_age_s when a home keyframe exists
+  VISION_NAV    the camera is tracking: it dead-reckons from the last trusted fix (or from home, when
+                the rig never left it). An unaligned heading does not stop it: a still camera's position
+                is right in any heading; guidance then says heading_aligned: false
+  RETURN_HOME   VISION_NAV with a tracking camera for return_home_after_s: guidance to home is active
+  HOME_REACHED  (from RETURN_HOME) camera position within home_radius_m of home,
+                confirmed by a strict home keyframe match no older than home_match_max_age_s when a
+                home keyframe exists (the match also resets the vision position to home)
 
 Release back to GNSS_OK:
   jamming   the detectors are CLEAR again (GNSS trusted)
@@ -115,7 +118,7 @@ class StateMachine:
         """One epoch: ``v`` the detector verdict (gnss_trusted already gated, enu_m set), ``vis`` the
         VisionNav state at the epoch time (None without a camera), ``crumbs`` VisionNav.breadcrumbs()."""
         fused = self._fused(v, vis)
-        healthy = self._healthy(vis)
+        healthy = self._tracking(vis)
         self._healthy_since = (self._healthy_since if self._healthy_since is not None else t) if healthy else None
         out = {"release_spoofing": False, "route": None, "passed": [], "latch": None, "escalated": False}
         prev, reasons = self.state, []
@@ -129,7 +132,10 @@ class StateMachine:
         if self.crumbs is not None and fused is not None:
             out["passed"] = self.crumbs.step(fused["e"], fused["n"])
             guidance = {"advisory": True, "home_bearing_deg": fused["home_bearing_deg"],
-                        "home_distance_m": fused["home_distance_m"], **self.crumbs.guidance(fused["e"], fused["n"])}
+                        "home_distance_m": fused["home_distance_m"],
+                        "heading_deg": vis.get("heading") if vis else None,
+                        "heading_aligned": bool(vis and vis.get("aligned")),
+                        **self.crumbs.guidance(fused["e"], fused["n"])}
         self.state = new
         out.update(state=new, changed=new != prev, previous=prev, reasons=reasons, cause=self.cause,
                    fused=fused, guidance=guidance)
@@ -169,7 +175,8 @@ class StateMachine:
         if st in (JAMMED, SPOOFED):
             if healthy:
                 reasons.append(f"camera dead reckoning from the last trusted fix "
-                               f"({vis.get('since_anchor_m') or 0:.1f} m travelled since)")
+                               f"({vis.get('since_anchor_m') or 0:.1f} m travelled since)"
+                               + ("" if vis.get("aligned") else "; heading not aligned to GNSS yet"))
                 return VISION_NAV
         elif st == VISION_NAV:
             if healthy and fused is not None and t - self._healthy_since >= c["return_home_after_s"]:
@@ -210,21 +217,28 @@ class StateMachine:
         r, enu = self.rel, v.get("enu_m")
         if not v.get("fix_valid") or enu is None:
             return False, "no GNSS fix"
-        if not self._healthy(vis):
+        if not self._tracking(vis):
             return False, "no camera track to compare with"
         d = math.hypot(enu[0] - vis["e"], enu[1] - vis["n"])
-        vd = (v.get("features") or {}).get("vision_diff_mps")
+        feats = v.get("features") or {}
+        vd, pd = feats.get("vision_diff_mps"), feats.get("vision_pos_drift_m")
         if d > r["max_pos_diff_m"]:
             return False, f"GNSS {d:.1f} m from the camera position"
-        if vd is None:
+        if vd is None and pd is None:
             return False, "no GNSS-vs-camera velocity yet"
-        if vd > r["max_vel_diff_mps"]:
+        if vd is None:                       # heading not aligned (still rig): the 30 s displacement check instead
+            if pd > r["max_pos_diff_m"]:
+                return False, f"GNSS and camera displacement {pd:.1f} m apart"
+            vd_text = f"displacement within {pd:.1f} m"
+        elif vd > r["max_vel_diff_mps"]:
             return False, f"GNSS velocity {vd:.2f} m/s off the camera"
+        else:
+            vd_text = f"velocity within {vd:.2f} m/s"
         if v["spoofing"]["score"] > r["max_score"]:
             return False, f"spoofing score {v['spoofing']['score']:.2f}"
         if v["jamming"]["level"] != CLEAR:
             return False, f"jamming {v['jamming']['level']}"
-        return True, f"position within {d:.1f} m, velocity within {vd:.2f} m/s"
+        return True, f"position within {d:.1f} m, {vd_text}"
 
     def _at_home(self, t, vis, fused, reasons) -> bool:
         c = self.c
@@ -242,9 +256,11 @@ class StateMachine:
         return True
 
     @staticmethod
-    def _healthy(vis) -> bool:
+    def _tracking(vis) -> bool:
+        """The camera carries the position: dead reckoning with a live track. The heading need not be
+        aligned (the stationary bench never aligns; its position is still right)."""
         return bool(vis) and vis.get("mode") == "dead_reckoning" and vis.get("e") is not None \
-            and bool(vis.get("aligned")) and vis.get("flag") != "vision_lost"
+            and vis.get("flag") != "vision_lost"
 
     def _fused(self, v, vis) -> dict | None:
         enu = v.get("enu_m")

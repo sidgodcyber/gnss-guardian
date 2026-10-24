@@ -11,6 +11,7 @@ whole motion.
 """
 from __future__ import annotations
 
+import bisect
 import math
 from collections import deque
 
@@ -34,7 +35,8 @@ class VisualOdometry:
         self.e = self.n = 0.0                       # cumulative track, vision frame
         self.distance_m = 0.0
         self.hist: deque = deque()                  # (t, e, n, heading, quality)
-        self.keep_s = max(v["velocity_window_s"], cfg["vision"]["anchor_delay_s"]) + 5.0
+        self.keep_s = max(v["velocity_window_s"], v["anchor_delay_s"],
+                          cfg["detect"]["spoofing"]["vision_pos_window_s"]) + 5.0
         self._last_t: float | None = None
         self._t_ref: float | None = None           # time of the flow's reference frame
         self._last_good_t: float | None = None
@@ -91,11 +93,14 @@ class VisualOdometry:
             return None
         if t >= h[-1][0]:
             return h[-1][1], h[-1][2]
-        for (t0, e0, n0, *_), (t1, e1, n1, *_) in zip(h, list(h)[1:]):
-            if t0 <= t <= t1:
-                w = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
-                return e0 + w * (e1 - e0), n0 + w * (n1 - n0)
-        return None
+        k = bisect.bisect_right([x[0] for x in h], t)      # h[k-1].t <= t < h[k].t
+        (t0, e0, n0, *_), (t1, e1, n1, *_) = h[k - 1], h[k]
+        w = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+        return e0 + w * (e1 - e0), n0 + w * (n1 - n0)
+
+    def mean_quality(self, t0: float, t1: float) -> float:
+        q = [x[4] for x in self.hist if t0 <= x[0] <= t1]
+        return sum(q) / len(q) if q else 0.0
 
     def velocity(self) -> tuple[float, float, float, float] | None:
         """(t, v_east, v_north, mean quality) over the last velocity_window_s; t is the centre of

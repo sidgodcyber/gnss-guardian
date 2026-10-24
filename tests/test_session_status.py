@@ -18,7 +18,7 @@ def test_replay_session_files_and_home(tmp_path, cfg):
     s = replay(src, cfg, tmp_path / "auto", echo=echo.append)
     info = json.loads((tmp_path / "auto" / "session.json").read_text())
     home = info["home"]
-    assert home["source"].startswith("median of the first 30 s") and abs(home["lat"] - 29.2556) < 1e-4
+    assert home["source"] == "median of 30 s of trusted fixes" and home["spread_m"] < 1 and abs(home["lat"] - 29.2556) < 1e-4
     eps = read_jsonl(tmp_path / "auto" / "epochs.jsonl")
     assert len(eps) == s["epochs"] == 150
     assert eps[110]["enu_m"] is not None and eps[-1]["enu_m"] is None and json.loads((tmp_path / "auto" / "latest.json").read_text())["seq"] == 149

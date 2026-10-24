@@ -3,7 +3,8 @@
     gnss-guardian status --data session/live          # one line per second, Ctrl-C to stop
 
     14:00:05 IST | GNSS TRUSTED | GNSS_OK | fix 9/11 | C/N0 38.4 sd 5.0 | HDOP 0.9 | jam CLEAR 0.00 | spoof CLEAR 0.05 | home 12 m at 270 deg (gnss) | age 0.4 s
-    14:02:09 IST | GNSS denied: jamming or blockage | RETURN_HOME | fix lost | ... | home 9 m at 268 deg (vision) | next waypoint 4: 1.8 m at 270 deg
+    14:02:09 IST | GNSS denied: jamming or blockage | RETURN_HOME | fix lost | ... | home 9 m at 268 deg (vision) | next waypoint 4: 1.8 m at 270 deg | home keyframe stored (412 features)
+    14:03:40 IST | GNSS SPOOFING ALARM | SPOOFED | ... | spoof ALARM 0.95 (position jumped 20 m ...; jump after degraded fix: toward the camera position ...)
     14:05:30 IST | STALE: last epoch 12 s old (receiver silent or live mode stopped) | GNSS UNKNOWN | last: fix 9/11 | ...
 """
 from __future__ import annotations
@@ -64,6 +65,12 @@ def status_line(folder: str | Path, tz: str = "Asia/Kolkata", now: datetime | No
     if g:                                            # advisory guidance only: the module commands nothing
         w = g["waypoint"]
         parts.append(f"next waypoint {w['id']}: {w['distance_m']:.1f} m at {w['bearing_deg']:.0f} deg")
+    hs = v.get("home_status")
+    if hs and not hs["set"]:
+        parts.append(hs["detail"])
+    kf = (v.get("vision") or {}).get("home_kf")
+    if kf:
+        parts.append(f"home keyframe {kf['status']}" + (f" ({kf['features']} features)" if kf.get("features") else ""))
     if v.get("latch") and not v["latch"]["agreeing"]:
         parts.append(f"spoof latch: {v['latch']['detail']}")
     if v.get("antenna") not in (None, "OK"):

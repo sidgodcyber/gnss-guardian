@@ -31,6 +31,10 @@ class JammingDetector:
         s.value = weighted_sum(s.parts, c["weights"])
         if f["fix_lost"] and (f["drop_frac"] or 0) >= c["fix_lost_with_drop"]:
             s.value = max(s.value, 0.9)
+        elif f["n_judged"] < c["few_sats_judged"] and s.value > c["few_sats_cap"]:
+            s.value = c["few_sats_cap"]         # 2 of 4 fading indoors: SUSPECT at most while the fix holds
+            s.notes.append(f"only {f['n_judged']} satellites judged: score capped at {c['few_sats_cap']} "
+                           f"(SUSPECT) while the fix holds")
         if (f["n_judged_tracked"] >= c["sky_change_min_tracked"] and f["tracked_drop_db"] is not None
                 and f["tracked_drop_db"] < c["drop_db"] / 2):
             s.value *= c["sky_change_scale"]

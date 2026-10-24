@@ -11,11 +11,13 @@ host-time order, so vision runs exactly as it did live.
 """
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 
 from gnss_guardian.detect.engine import DetectionEngine
 from gnss_guardian.detect.features import epoch_time
+from gnss_guardian.detect.spoofing import JUMP_AFTER_DEGRADED
 from gnss_guardian.home import HomeSetter
 from gnss_guardian.io.epochs import EpochBuilder
 from gnss_guardian.io.nmea import split_prefix
@@ -34,6 +36,8 @@ class Pipeline:
         self._home_vision = None
         self.builder = EpochBuilder(cfg)
         self.engine = DetectionEngine(cfg)
+        if vision is not None:
+            self.engine.vision_track = vision.displacement     # 30 s GNSS-vs-camera displacement check
         self.state = StateMachine(cfg, camera=vision is not None)
         self.home = HomeSetter(cfg, home)
         self.writer = writer
@@ -44,6 +48,8 @@ class Pipeline:
                        **{f"{d}_suspect_epochs": 0 for d in DETECTORS}}
         self._warm = True
         self._antenna = None
+        self._last_enu: list | None = None          # newest valid fix, metres from home
+        self._home_wait: str | None = None
         if self.home.home is not None:
             writer.set_home(self.home.home)
 
@@ -72,9 +78,21 @@ class Pipeline:
         if new_home:
             self.writer.set_home(new_home)
             self.writer.event("home_set", t_gnss=v["t_gnss"], **new_home)
-            self.echo(f"{v['t_gnss']}  home set: {new_home['lat']:.6f}, {new_home['lon']:.6f} ({new_home['source']})")
+            self.echo(f"{v['t_gnss']}  home set: {new_home['lat']:.6f}, {new_home['lon']:.6f} ({new_home['source']}, "
+                      f"spread {new_home['spread_m']} m, HDOP {new_home['hdop']}, {new_home['sats_used']:.0f} sats)")
+            if self.vision is not None:
+                self.vision.set_home(t)              # the rig stands on home: vision starts there
+        elif self.home.waiting and self.home.waiting.startswith("home not set") and self.home.waiting != self._home_wait:
+            self.writer.event("home_waiting", t_gnss=v["t_gnss"], detail=self.home.waiting)
+            self.echo(f"{v['t_gnss']}  {self.home.waiting}")
+        self._home_wait = self.home.waiting
+        v["home_status"] = {"set": self.home.home is not None, "detail": self.home.waiting or self.home.home["source"]}
         en = self.home.enu(v["lat"], v["lon"])
         v["enu_m"] = [round(en[0], 2), round(en[1], 2)] if en else None
+        if JUMP_AFTER_DEGRADED in v["spoofing"]["reasons"]:
+            self._annotate_jump(t, v)
+        if v["fix_valid"] and v["enu_m"] is not None:
+            self._last_enu = v["enu_m"]
         self.counts["epochs"] += 1
         if self._warm and not v["warming_up"]:
             self._warm = False
@@ -102,6 +120,24 @@ class Pipeline:
         self._state_step(t, v)
         self.writer.epoch(v)
         return v
+
+    def _annotate_jump(self, t: float, v: dict) -> None:
+        """A jump right after jamming or a fix gap keeps its alarm; say whether it moved GNSS toward
+        the camera position (a receiver catching up after a degraded fix) or away from it."""
+        cam = self.vision.position_at(t) if self.vision is not None else None
+        prev, cur = self._last_enu, v["enu_m"]
+        if cam is None or prev is None or cur is None:
+            v["jump_check"] = {"after_degraded": True, "toward_camera": None}
+            text = f"{JUMP_AFTER_DEGRADED} (no camera position to compare with)"
+        else:
+            before = math.hypot(prev[0] - cam[0], prev[1] - cam[1])
+            after = math.hypot(cur[0] - cam[0], cur[1] - cam[1])
+            v["jump_check"] = {"after_degraded": True, "toward_camera": after < before,
+                               "gnss_to_camera_before_m": round(before, 1), "gnss_to_camera_after_m": round(after, 1)}
+            text = (f"{JUMP_AFTER_DEGRADED}: {'toward' if after < before else 'away from'} the camera position "
+                    f"(GNSS {before:.1f} m -> {after:.1f} m from it)")
+        r = v["spoofing"]["reasons"]
+        r[r.index(JUMP_AFTER_DEGRADED)] = text
 
     def _state_step(self, t: float, v: dict) -> None:
         out = self.state.update(t, v, v.get("vision"), self.vision.breadcrumbs() if self.vision else None)
@@ -136,6 +172,10 @@ class Pipeline:
             if kf.home:
                 self.echo(f"{v['t_gnss']}  home keyframe stored ({len(kf.pts)} features)")
         nav.new_keyframes.clear()
+        for kind, data in nav.events:
+            self.writer.event(kind, t_gnss=v["t_gnss"], **data)
+            self.echo(f"{v['t_gnss']}  {data.get('detail', kind)}")
+        nav.events.clear()
         if v["gnss_trusted"]:
             self._home_vision = None
         elif st["home_confirmed"] and self._home_vision is None and \
