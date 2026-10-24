@@ -38,7 +38,7 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, currentTimeS
 
   const v = row.vision;
   const speed = v?.v_e != null && v?.v_n != null ? Math.hypot(v.v_e, v.v_n) : null;
-  const navByVision = row.state === 'VISION_NAV';
+  const navByVision = row.fused?.source === 'vision' || row.fused?.source === 'vision_stale';
 
   return (
     <div className="flex flex-col bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden h-full shadow-xl">
@@ -49,7 +49,13 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, currentTimeS
             navByVision ? 'bg-sky-500/25 text-sky-300 border-sky-400' : 'bg-slate-800 text-slate-400 border-slate-700'
           }`}
         >
-          {navByVision ? 'position from vision (dead reckoning)' : v ? `vision ${v.mode.replace(/_/g, ' ')}` : 'no vision data'}
+          {navByVision
+            ? row.fused?.source === 'vision_stale'
+              ? 'camera track lost: position held'
+              : 'position from vision (dead reckoning)'
+            : v
+            ? `vision ${v.mode.replace(/_/g, ' ')}`
+            : 'no vision data'}
         </span>
       </div>
 

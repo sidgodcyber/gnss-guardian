@@ -1,10 +1,13 @@
-import { DashboardFile, GuardianState, LoadedSession, Row, Transition } from '../types/gnssGuardian';
+import { DashboardFile, GuardianState, LoadedSession, Route, Row, Transition } from '../types/gnssGuardian';
 
 const FORMAT_PREFIX = 'gnss-guardian-dashboard/';
 
 function check(data: DashboardFile, where: string): DashboardFile {
   if (!data || typeof data.format !== 'string' || !data.format.startsWith(FORMAT_PREFIX)) {
     throw new Error(`${where}: not a gnss-guardian dashboard.json (run gnss-guardian replay again to export it)`);
+  }
+  if (data.format === `${FORMAT_PREFIX}1`) {
+    throw new Error(`${where}: exported before the state machine (format 1, no state or guidance): run gnss-guardian replay again`);
   }
   return data;
 }
@@ -72,8 +75,23 @@ export function frameAt(rows: Row[], t: number): number | null {
 }
 
 export function stateLabel(state: GuardianState | null): string {
-  return state ?? 'WARM-UP';
+  return state === null || state === 'WARMING_UP' ? 'WARM-UP' : state;
 }
+
+export function lastRouteAt(routes: Route[], t: number): Route | undefined {
+  let found: Route | undefined;
+  for (const r of routes) {
+    if (r.t !== null && r.t <= t) found = r;
+  }
+  return found;
+}
+
+export const FUSED_SOURCE: Record<string, string> = {
+  gnss: 'GNSS',
+  vision: 'camera dead reckoning',
+  vision_stale: 'camera lost: held',
+  last_fix: 'last trusted fix: held',
+};
 
 export function lastTransitionAt(transitions: Transition[], t: number): Transition | undefined {
   let found: Transition | undefined;

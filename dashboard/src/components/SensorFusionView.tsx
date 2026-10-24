@@ -1,6 +1,6 @@
 import React from 'react';
 import { Row } from '../types/gnssGuardian';
-import { fmt, stateLabel } from '../services/session';
+import { FUSED_SOURCE, fmt, stateLabel } from '../services/session';
 
 const Cell: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
   <div className="p-2.5 bg-slate-900/80 rounded-lg border border-slate-800 min-w-0">
@@ -10,7 +10,7 @@ const Cell: React.FC<{ label: string; value: React.ReactNode }> = ({ label, valu
 );
 
 export const SensorFusionView: React.FC<{ row: Row }> = ({ row }) => {
-  const { gnss, vision: v, features: f } = row;
+  const { gnss, vision: v, features: f, fused, guidance: g, latch } = row;
   const num = (k: string) => (typeof f[k] === 'number' ? (f[k] as number) : null);
   return (
     <div className="flex flex-col bg-slate-900/90 border border-slate-800 rounded-xl p-5 gap-5 shadow-xl">
@@ -56,6 +56,29 @@ export const SensorFusionView: React.FC<{ row: Row }> = ({ row }) => {
           ) : (
             <div className="text-xs text-slate-500">No camera in this session: replay ran without --video.</div>
           )}
+        </div>
+      </div>
+
+      <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+          <div className="text-xs font-bold uppercase tracking-wider text-violet-300">Fused position · return-home guidance</div>
+          <div className="text-[10px] font-mono text-slate-500">advisory output: the module never commands the aircraft</div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Cell label="Source" value={fused ? FUSED_SOURCE[fused.source] ?? fused.source : '–'} />
+          <Cell label="Position (east, north)" value={fused ? `${fmt(fused.e, 1)}, ${fmt(fused.n, 1)} m` : '–'} />
+          <Cell label="Home" value={fused ? `${fmt(fused.home_distance_m, 1, 'm')} at ${fmt(fused.home_bearing_deg, 0)}°` : '–'} />
+          <Cell label="Alarm cause" value={row.cause ?? '–'} />
+          <Cell
+            label="Next waypoint"
+            value={g ? `${g.waypoint.id === 'home' ? 'home' : `kf ${g.waypoint.id}`}: ${fmt(g.waypoint.distance_m, 1, 'm')} at ${fmt(g.waypoint.bearing_deg, 0)}°` : 'not guiding'}
+          />
+          <Cell label="Path remaining" value={g ? `${fmt(g.path_remaining_m, 1, 'm')} · ${g.waypoints_left} waypoints` : '–'} />
+          <Cell
+            label="Spoof latch"
+            value={latch ? `${latch.agreeing ? 'agreeing' : 'waiting'} ${fmt(latch.agree_s, 0)}/${latch.needed_s} s` : 'not held'}
+          />
+          <Cell label="Latch detail" value={latch ? latch.detail : '–'} />
         </div>
       </div>
     </div>

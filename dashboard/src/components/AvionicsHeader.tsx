@@ -17,14 +17,14 @@ const navItems = [
   { id: 'logs', label: 'Flight Logs' },
 ];
 
-// RETURN_HOME / HOME_REACHED belong to the Phase 3 state machine, which the pipeline does not have yet.
-const stateSteps: Array<{ id: string; label: string; matches: (s: GuardianState | null) => boolean; implemented: boolean }> = [
-  { id: 'GNSS_OK', label: 'GNSS_OK', matches: (s) => s === 'GNSS_OK', implemented: true },
-  { id: 'SUSPECT', label: 'SUSPECT', matches: (s) => s === 'SUSPECT', implemented: true },
-  { id: 'JAMMED_OR_SPOOFED', label: 'JAMMED | SPOOFED', matches: (s) => s === 'JAMMED' || s === 'SPOOFED', implemented: true },
-  { id: 'VISION_NAV', label: 'VISION_NAV', matches: (s) => s === 'VISION_NAV', implemented: true },
-  { id: 'RETURN_HOME', label: 'RETURN_HOME', matches: (s) => s === 'RETURN_HOME', implemented: false },
-  { id: 'HOME_REACHED', label: 'HOME_REACHED', matches: (s) => s === 'HOME_REACHED', implemented: false },
+// The states of the pipeline's state machine (gnss_guardian/state.py), read from dashboard.json.
+const stateSteps: Array<{ id: string; label: string; matches: (s: GuardianState | null) => boolean }> = [
+  { id: 'GNSS_OK', label: 'GNSS_OK', matches: (s) => s === 'GNSS_OK' },
+  { id: 'SUSPECT', label: 'SUSPECT', matches: (s) => s === 'SUSPECT' },
+  { id: 'JAMMED_OR_SPOOFED', label: 'JAMMED | SPOOFED', matches: (s) => s === 'JAMMED' || s === 'SPOOFED' },
+  { id: 'VISION_NAV', label: 'VISION_NAV', matches: (s) => s === 'VISION_NAV' },
+  { id: 'RETURN_HOME', label: 'RETURN_HOME', matches: (s) => s === 'RETURN_HOME' },
+  { id: 'HOME_REACHED', label: 'HOME_REACHED', matches: (s) => s === 'HOME_REACHED' },
 ];
 
 const activeStyle: Record<string, string> = {
@@ -32,6 +32,8 @@ const activeStyle: Record<string, string> = {
   SUSPECT: 'bg-amber-950 text-amber-200 border-amber-500 font-bold',
   JAMMED_OR_SPOOFED: 'bg-red-950 text-red-200 border-red-500 font-bold',
   VISION_NAV: 'bg-sky-950 text-sky-200 border-sky-400 font-bold',
+  RETURN_HOME: 'bg-violet-950 text-violet-200 border-violet-400 font-bold',
+  HOME_REACHED: 'bg-teal-950 text-teal-200 border-teal-400 font-bold',
 };
 
 export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
@@ -124,7 +126,7 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
       <div className="bg-slate-950 px-4 md:px-6 py-1.5 border-t border-slate-900 overflow-x-auto">
         <div className="flex items-center gap-1.5 min-w-max">
           <span className="text-[10px] uppercase font-bold text-slate-500 mr-2 tracking-wider">State:</span>
-          {hasSession && currentState === null && (
+          {hasSession && (currentState === null || currentState === 'WARMING_UP') && (
             <span className="px-2.5 py-1 rounded text-xs font-mono border bg-slate-800 text-slate-200 border-slate-500 mr-2">
               WARM-UP (no verdicts yet)
             </span>
@@ -134,13 +136,8 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
             return (
               <React.Fragment key={step.id}>
                 <div
-                  title={step.implemented ? undefined : 'Not produced by the pipeline yet (Phase 3 state machine)'}
                   className={`px-2.5 py-1 rounded text-xs font-mono border ${
-                    isActive
-                      ? activeStyle[step.id]
-                      : step.implemented
-                      ? 'bg-slate-900/60 text-slate-500 border-slate-800/80'
-                      : 'bg-transparent text-slate-700 border-dashed border-slate-800 line-through'
+                    isActive ? activeStyle[step.id] : 'bg-slate-900/60 text-slate-500 border-slate-800/80'
                   }`}
                 >
                   {step.label}
@@ -150,7 +147,7 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
             );
           })}
           <span className="ml-3 text-[10px] text-slate-600 font-mono">
-            derived from detector levels + vision mode · RETURN_HOME / HOME_REACHED not implemented
+            from the pipeline state machine · guidance is advisory, nothing commands the aircraft
           </span>
         </div>
       </div>

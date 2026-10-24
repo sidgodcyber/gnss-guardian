@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DashboardFile, Row } from '../types/gnssGuardian';
-import { fmt } from '../services/session';
+import { fmt, lastRouteAt } from '../services/session';
 
 interface TacticalMapProps {
   data: DashboardFile;
@@ -33,6 +33,12 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     for (const k of data.keyframes) {
       xs.push(k.e);
       ys.push(k.n);
+    }
+    for (const r of data.routes ?? []) {
+      for (const w of r.waypoints) {
+        xs.push(w.e);
+        ys.push(w.n);
+      }
     }
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: Math.max(10, maxX - minX), h: Math.max(10, maxY - minY) };
@@ -111,6 +117,13 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
       2.5
     );
 
+    const route = row.guidance ? lastRouteAt(data.routes ?? [], currentTimeSec) : undefined;
+    if (route) {
+      ctx.setLineDash([6, 4]);
+      line(route.waypoints, '#a78bfa', 1.5);
+      ctx.setLineDash([]);
+    }
+
     for (const k of data.keyframes) {
       if (k.t === null || k.t > currentTimeSec) continue;
       const q = toPx(k.e, k.n);
@@ -145,6 +158,29 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     };
     marker(row.gnss.e, row.gnss.n, '#10b981');
     marker(row.vision?.e ?? null, row.vision?.n ?? null, '#0ea5e9');
+
+    // fused position (ring) and, while guiding, an arrow to the next waypoint
+    if (row.fused) {
+      const q = toPx(row.fused.e, row.fused.n);
+      ctx.strokeStyle = '#f5d0fe';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      if (row.guidance) {
+        const w = toPx(row.guidance.waypoint.e, row.guidance.waypoint.n);
+        const a = Math.atan2(w.y - q.y, w.x - q.x);
+        ctx.strokeStyle = '#c4b5fd';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(q.x, q.y);
+        ctx.lineTo(w.x, w.y);
+        ctx.lineTo(w.x - 8 * Math.cos(a - 0.4), w.y - 8 * Math.sin(a - 0.4));
+        ctx.moveTo(w.x, w.y);
+        ctx.lineTo(w.x - 8 * Math.cos(a + 0.4), w.y - 8 * Math.sin(a + 0.4));
+        ctx.stroke();
+      }
+    }
   }, [data, row, history, currentTimeSec, size, scale, extent]);
 
   const v = row.vision;
@@ -180,6 +216,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
         <div className="absolute bottom-3 left-3 flex flex-col gap-1 p-2 bg-slate-950/90 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300">
           <div className="flex items-center gap-2"><span className="w-3 h-0.5 bg-emerald-500" />GNSS track</div>
           <div className="flex items-center gap-2"><span className="w-3 h-0.5 bg-sky-500" />vision track</div>
+          <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full border-2 border-fuchsia-200" />fused position</div>
+          <div className="flex items-center gap-2"><span className="w-3 border-t border-dashed border-violet-400" />return route (advisory)</div>
           <div className="flex items-center gap-2"><span className="w-2 h-2 bg-sky-400" />keyframe ({data.keyframes.filter((k) => k.t !== null && k.t <= currentTimeSec).length})</div>
           <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full border border-slate-200 text-[7px] leading-3 text-center">H</span>home (0, 0)</div>
         </div>
@@ -192,6 +230,14 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
             vision <span className="text-sky-400">{fmt(v?.e, 1)}, {fmt(v?.n, 1)} m</span>
           </div>
           <div className="pt-1 border-t border-slate-800">GNSS–vision gap: {fmt(sep, 2, 'm')}</div>
+          {row.guidance && (
+            <div className="pt-1 border-t border-slate-800 text-violet-300">
+              home {fmt(row.guidance.home_distance_m, 1, 'm')} at {fmt(row.guidance.home_bearing_deg, 0)}°
+              <br />
+              next {row.guidance.waypoint.id === 'home' ? 'home' : `kf ${row.guidance.waypoint.id}`}{' '}
+              {fmt(row.guidance.waypoint.distance_m, 1, 'm')} at {fmt(row.guidance.waypoint.bearing_deg, 0)}°
+            </div>
+          )}
         </div>
 
         {(homeAt == null || currentTimeSec < homeAt) && (

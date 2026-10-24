@@ -1,6 +1,6 @@
 import React from 'react';
 import { Level, Row } from '../types/gnssGuardian';
-import { fmt, stateLabel } from '../services/session';
+import { FUSED_SOURCE, fmt, stateLabel } from '../services/session';
 
 const levelText: Record<Level, string> = {
   CLEAR: 'text-emerald-300',
@@ -14,6 +14,8 @@ const stateText: Record<string, string> = {
   JAMMED: 'text-red-300',
   SPOOFED: 'text-red-300',
   VISION_NAV: 'text-sky-300',
+  RETURN_HOME: 'text-violet-300',
+  HOME_REACHED: 'text-teal-300',
   'WARM-UP': 'text-slate-300',
 };
 
@@ -31,14 +33,8 @@ const Card: React.FC<{ label: string; value: React.ReactNode; sub?: React.ReactN
 );
 
 export const StatusCards: React.FC<{ row: Row }> = ({ row }) => {
-  const { gnss, jamming, spoofing, vision } = row;
+  const { gnss, jamming, spoofing, vision, fused } = row;
   const st = stateLabel(row.state);
-  const nav =
-    row.state === 'VISION_NAV' && vision?.e != null && vision?.n != null
-      ? Math.hypot(vision.e, vision.n)
-      : gnss.e != null && gnss.n != null
-      ? Math.hypot(gnss.e, gnss.n)
-      : null;
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
       <Card label="State" value={st} tone={stateText[st]} sub={row.gnss_trusted ? 'GNSS trusted' : 'GNSS not trusted'} />
@@ -58,7 +54,12 @@ export const StatusCards: React.FC<{ row: Row }> = ({ row }) => {
         tone={vision?.mode === 'dead_reckoning' ? 'text-sky-300' : 'text-slate-100'}
         sub={vision ? `${vision.keyframes} keyframes` : undefined}
       />
-      <Card label="From home" value={fmt(nav, 1, 'm')} sub={row.state === 'VISION_NAV' ? 'vision position' : 'GNSS position'} />
+      <Card
+        label="Home"
+        value={fused ? `${fmt(fused.home_distance_m, 1, 'm')} · ${fmt(fused.home_bearing_deg, 0)}°` : '–'}
+        tone={row.guidance ? 'text-violet-300' : 'text-slate-100'}
+        sub={fused ? `fused: ${FUSED_SOURCE[fused.source] ?? fused.source}` : 'no position yet'}
+      />
     </div>
   );
 };

@@ -23,6 +23,10 @@ const markerColor = (s: GuardianState | null) =>
     ? 'bg-red-500 border-red-300'
     : s === 'VISION_NAV'
     ? 'bg-sky-500 border-sky-300'
+    : s === 'RETURN_HOME'
+    ? 'bg-violet-500 border-violet-300'
+    : s === 'HOME_REACHED'
+    ? 'bg-teal-500 border-teal-300'
     : 'bg-slate-500 border-slate-300';
 
 const levelStyle: Record<Level, string> = {
@@ -143,7 +147,7 @@ export const DetectionIndicatorsPanel: React.FC<Props> = ({
   onRestart,
 }) => {
   const dur = Math.max(0.001, data.meta.duration_s);
-  const markers = useMemo(() => data.transitions.filter((tr) => tr.state !== null), [data]);
+  const markers = useMemo(() => data.transitions.filter((tr) => tr.state !== null && tr.state !== 'WARMING_UP'), [data]);
   const h = data.config.hysteresis;
 
   return (

@@ -1,6 +1,8 @@
-// Mirrors gnss_guardian/dashboard_export.py (format gnss-guardian-dashboard/1).
+// Mirrors gnss_guardian/dashboard_export.py (format gnss-guardian-dashboard/2). The state, fused
+// position, guidance and latch come from the pipeline's state machine (gnss_guardian/state.py).
 
 export type GuardianState =
+  | 'WARMING_UP'
   | 'GNSS_OK'
   | 'SUSPECT'
   | 'JAMMED'
@@ -34,11 +36,53 @@ export interface VisionRow {
   home_dist_m: number | null;
 }
 
+export type Cause = 'jamming' | 'spoofing';
+
+// gnss: GNSS trusted · vision: camera dead reckoning from the last trusted fix ·
+// vision_stale: camera track stopped (low texture), held · last_fix: no camera, last trusted fix held
+export interface Fused {
+  source: 'gnss' | 'vision' | 'vision_stale' | 'last_fix';
+  e: number;
+  n: number;
+  home_distance_m: number;
+  home_bearing_deg: number;
+}
+
+export interface Waypoint {
+  id: number | 'home';
+  e: number;
+  n: number;
+}
+
+// Advisory only: the module never commands the aircraft.
+export interface Guidance {
+  advisory: true;
+  home_bearing_deg: number;
+  home_distance_m: number;
+  waypoint: Waypoint & { bearing_deg: number; distance_m: number };
+  waypoints_left: number;
+  path_remaining_m: number;
+}
+
+// Spoof latch: GNSS_OK only after GNSS and the camera agree for needed_s in a row.
+export interface Latch {
+  agree_s: number;
+  needed_s: number;
+  agreeing: boolean;
+  detail: string;
+}
+
+export interface Route {
+  t: number | null;
+  waypoints: Waypoint[];
+}
+
 export interface Row {
   t: number;
   t_gnss: string;
   seq: number;
   state: GuardianState | null;
+  cause: Cause | null;
   warming_up: boolean;
   gnss_trusted: boolean;
   gnss: {
@@ -54,6 +98,9 @@ export interface Row {
   spoofing: DetectorRow;
   features: Record<string, number | boolean | null>;
   vision: VisionRow | null;
+  fused: Fused | null;
+  guidance: Guidance | null;
+  latch: Latch | null;
   frame: number | null;
 }
 
@@ -62,6 +109,7 @@ export interface Transition {
   t_gnss: string;
   state: GuardianState | null;
   from: GuardianState | null;
+  cause: Cause | null;
   reasons: string[];
   indicators: string[];
 }
@@ -137,6 +185,7 @@ export interface DashboardFile {
   transitions: Transition[];
   detector_levels: LevelChange[];
   keyframes: Keyframe[];
+  routes: Route[];
   events: SessionEventRow[];
 }
 
