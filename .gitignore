@@ -11,6 +11,7 @@ venv/
 build/
 dist/
 /synth/
+/demo/
 /*.nmea
 /*.avi
 # Teammate dashboard archive and its raw extraction (the kept source lives in dashboard/).
