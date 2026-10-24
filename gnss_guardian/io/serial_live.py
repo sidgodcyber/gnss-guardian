@@ -229,6 +229,17 @@ def start_camera(spec: str, cfg: dict, out_dir: Path, writer, clock):
     return nav, th
 
 
+def stop_on_sigterm() -> None:
+    """systemd / kill send SIGTERM: stop like Ctrl-C, so the files are closed (overlay.mp4 is unreadable
+    without its trailer). Only possible from the main thread."""
+    import signal
+
+    def raise_interrupt(signum, frame):
+        raise KeyboardInterrupt
+    if threading.current_thread() is threading.main_thread() and hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, raise_interrupt)
+
+
 def start_display(cfg: dict, hub: LiveHub, nav, writer, out_dir: Path, port: int | None, record: bool,
                   cam_thread, on_inject, echo, clock=time.monotonic):
     """(server, overlay thread); either is None when not wanted or not possible. Display only: a
@@ -341,6 +352,7 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
                                 cfg["l86"]["galileo_check_s"])
                     galileo_done = True
 
+    stop_on_sigterm()
     try:
         while duration_s is None or time.monotonic() - t0 < duration_s:
             if ser is None:

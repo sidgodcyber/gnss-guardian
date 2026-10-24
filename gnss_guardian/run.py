@@ -268,6 +268,12 @@ def export_live_session(folder: str | Path, cfg: dict) -> dict:
     frames = folder / "overlay_frames.csv"
     if video is not None and not frames.is_file():
         video = None
+    if video is not None:                    # a run killed hard leaves an mp4 without its trailer
+        import cv2
+        cap = cv2.VideoCapture(str(video))
+        ok = cap.read()[0]
+        cap.release()
+        video = video if ok else None
     path = write_dashboard_json(folder, cfg, video=video, frames_csv=frames if video else None)
     eps = read_jsonl(folder / "epochs.jsonl")
     states, prev = [], None

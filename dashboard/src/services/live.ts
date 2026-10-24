@@ -75,8 +75,10 @@ export function appendLive(file: DashboardFile, view: LiveView): DashboardFile {
   } else if (!inj && wasInj) {
     events.push({ t: row.t, kind: 'demo_inject', detail: 'demo injection stopped' });
   }
-  if (view.home?.set && !file.meta.home_set) events.push({ t: row.t, kind: 'home_set', detail: 'home point set' });
-  const keyframes = (view.keyframes ?? []).map(([e, n, home], id) => ({ t: null, id, e, n, home }));
+  if (view.home?.set && !events.some((e) => e.kind === 'home_set')) {
+    events.push({ t: file.timeline.length ? row.t : 0, kind: 'home_set', detail: 'home point set' });   // joined after: from the start
+  }
+  const keyframes = (view.keyframes ?? []).map(([e, n, home], id) => ({ t: 0, id, e, n, home }));   // all stored already
   return {
     ...file,
     keyframes,
