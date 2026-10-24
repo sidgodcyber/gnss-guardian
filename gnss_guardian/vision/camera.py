@@ -123,7 +123,7 @@ class PiCamera:
 
 def read_frames_csv(path: Path) -> list[float]:
     """Host UTC seconds per frame: column host_utc (ISO, tools/record_session.py) or t_unix (seconds,
-    the standalone Pi recorders); t_mono (live overlay_frames.csv) is on the epochs' monotonic clock."""
+    the standalone Pi recorders); epoch_mono (live overlay_frames.csv only) is on the epochs' clock."""
     with open(path, encoding="ascii") as f:
         rows = csv.DictReader(f)
         cols = rows.fieldnames or []
@@ -131,8 +131,8 @@ def read_frames_csv(path: Path) -> list[float]:
             return [datetime.fromisoformat(r["host_utc"].replace("Z", "+00:00")).timestamp() for r in rows]
         if "t_unix" in cols:
             return [float(r["t_unix"]) for r in rows]
-        if "t_mono" in cols:
-            return [float(r["t_mono"]) for r in rows]
+        if "epoch_mono" in cols:
+            return [float(r["epoch_mono"]) for r in rows]
     raise ValueError(f"{path}: needs a host_utc or t_unix column (found {', '.join(cols) or 'none'})")
 
 

@@ -4,7 +4,7 @@ at a few frames per second so it never slows the vision loop.
     ov = OverlayThread(cfg, hub, nav, record=out_dir / "overlay.mp4", camera_fps=lambda: cam.fps)
     ov.start() ... ov.stop.set()
 
-On the frame (320x240): tracked corners and their flow (magnified), state, position source (GNSS or
+On the frame (320x240): tracked corners and their flow (x1.5), state, position source (GNSS or
 vision), displacement from home in metres and its bearing, camera heading, keyframe count, a
 "HOME MATCH" marker for a fresh strict home-keyframe match, "DEMO INJECTION ACTIVE" while a demo
 spoof is injected, and an inset map (metres from home) of the vision track against the GNSS track
@@ -56,7 +56,7 @@ def render(snap: dict | None, view: dict | None, track: dict, src_size=(640, 480
         a, b = pairs
         for (x0, y0), (x1, y1) in zip(a[::2], b[::2]):
             p1 = (int(x1 * sx), int(y1 * sy))
-            p0 = (int(p1[0] + 3 * (x0 - x1) * sx), int(p1[1] + 3 * (y0 - y1) * sy))     # flow x3, toward the past
+            p0 = (int(p1[0] + 1.5 * (x0 - x1) * sx), int(p1[1] + 1.5 * (y0 - y1) * sy))  # flow x1.5, toward the past
             cv2.line(img, p0, p1, (0, 220, 255), 1, cv2.LINE_AA)
             cv2.circle(img, p1, 2, (0, 255, 0), -1)
     v = view or {}
@@ -78,7 +78,7 @@ def render(snap: dict | None, view: dict | None, track: dict, src_size=(640, 480
     hm = snap.get("home_match") if snap else None
     if hm and snap.get("t") is not None and snap["t"] - hm["t"] <= match_max_age_s:
         cv2.rectangle(img, (1, 1), (W - 2, H - 2), (80, 255, 80), 3)
-        _text(img, f"HOME MATCH {hm['inliers']} inl", (W - 150, 48), 0.45, (80, 255, 80), 1)
+        _text(img, f"HOME MATCH ({hm['inliers']})", (W - 140, 48), 0.42, (80, 255, 80), 1)
     if snap and snap.get("flag") == "vision_lost":
         _text(img, "VISION LOST", (W // 2 - 50, H // 2), 0.6, (0, 0, 255), 2)
     inj = (v.get("injection") or {}).get("active")
@@ -144,7 +144,7 @@ class OverlayThread(threading.Thread):
             if w.isOpened():
                 self.events.append(("overlay_record", {"path": str(path), "fps": self.fps}))
                 self._times = open(self.record.with_name("overlay_frames.csv"), "w", encoding="ascii")
-                self._times.write("idx,t_mono\n")
+                self._times.write("idx,epoch_mono\n")
                 return w
             w.release()
         self.events.append(("overlay_record_failed", {"path": str(self.record)}))
