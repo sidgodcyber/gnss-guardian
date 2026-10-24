@@ -181,6 +181,7 @@ class CameraThread(threading.Thread):
         self.frames = 0
         self.fps: float | None = None
         self.target_fps: float | None = getattr(source, "fps", None)     # the source's own frame rate
+        self._exp_mode = None
         self.error: str | None = None
 
     def run(self):
@@ -192,9 +193,15 @@ class CameraThread(threading.Thread):
                     break
                 self.nav.on_frame(fr.t, fr.gray)
                 self.frames += 1
+                exp = getattr(self.source, "exposure", None)
+                if exp and exp.get("mode") != self._exp_mode:       # capped <-> auto: say so
+                    self._exp_mode = exp["mode"]
+                    self.writer.event("camera_exposure", **exp)
+                    log.info("camera exposure %s: %s us, gain %s (cap %s us)", exp["mode"], exp["exposure_us"],
+                             exp["gain"], exp["max_exposure_us"])
                 if time.monotonic() - t0 >= 10:
                     self.fps = round((self.frames - n0) / (time.monotonic() - t0), 1)
-                    self.writer.event("vision_rate", fps=self.fps, frames=self.frames)
+                    self.writer.event("vision_rate", fps=self.fps, frames=self.frames, **(exp or {}))
                     t0, n0 = time.monotonic(), self.frames
         except Exception as e:                           # a camera fault must not stop GNSS detection
             self.error = repr(e)

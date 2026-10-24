@@ -4,7 +4,7 @@ truth for testing vision odometry, keyframes and calibration without footage.
     python tools/synth_walk.py OUT_DIR [--walk loop:20:10:1.2 | outback:12:90:1.2 | --straight 10:1.2:90]
                                        [--duration-s 60] [--fps 30] [--sway-deg 1.5] [--bob-m 0.03]
                                        [--noise 2] [--mount-yaw-deg 0] [--true-focal-px 635]
-                                       [--start 2026-10-22T14:00:00Z] [--nmea]
+                                       [--start 2026-10-22T14:00:00Z] [--nmea] [--world E0:E1:N0:N1]
 
 writes OUT_DIR/video.avi (MJPG, grey), OUT_DIR/frames.csv (idx, host_utc, as tools/record_session.py
 does on the Pi), OUT_DIR/truth.csv (t, east, north, heading, height) and with --nmea a matching
@@ -33,17 +33,20 @@ WORLD_M = 24.0
 
 
 @functools.lru_cache(maxsize=4)
-def ground_texture(seed: int = 7, texel_m: float = TEXEL_M, world_m: float = WORLD_M, flat: bool = False) -> np.ndarray:
-    n = int(world_m / texel_m)
+def ground_texture(seed: int = 7, texel_m: float = TEXEL_M, world_m: float = WORLD_M, flat: bool = False,
+                   shape_m: tuple[float, float] | None = None) -> np.ndarray:
+    """world_m x world_m square, or a shape_m = (east, north) metres strip (a road for a long walk)."""
+    nx, ny = (int(world_m / texel_m),) * 2 if shape_m is None else (int(shape_m[0] / texel_m), int(shape_m[1] / texel_m))
     rng = np.random.default_rng(seed)
     if flat:                                             # low texture: smooth grey with faint noise
-        return np.clip(128 + rng.normal(0, 1.0, (n, n)), 0, 255).astype(np.uint8)
+        return np.clip(128 + rng.normal(0, 1.0, (ny, nx)), 0, 255).astype(np.uint8)
     def octave(cell_m, sigma):
-        k = max(2, int(world_m / cell_m))
-        small = rng.random((k, k), dtype=np.float32)
-        big = cv2.resize(small, (n, n), interpolation=cv2.INTER_CUBIC)
+        wx, wy = (world_m, world_m) if shape_m is None else shape_m
+        kx, ky = max(2, int(wx / cell_m)), max(2, int(wy / cell_m))
+        small = rng.random((ky, kx), dtype=np.float32)
+        big = cv2.resize(small, (nx, ny), interpolation=cv2.INTER_CUBIC)
         return cv2.GaussianBlur(big, (0, 0), sigma) if sigma else big
-    fine = cv2.GaussianBlur(rng.random((n, n), dtype=np.float32), (0, 0), 1.0)
+    fine = cv2.GaussianBlur(rng.random((ny, nx), dtype=np.float32), (0, 0), 1.0)
     tex = 0.40 * fine + 0.40 * octave(0.015, 0) + 0.20 * octave(0.10, 0)
     tex = (tex - tex.min()) / (tex.max() - tex.min())
     return (30 + 190 * tex).astype(np.uint8)
@@ -61,10 +64,18 @@ class Pose:
 
 
 class Renderer:
-    def __init__(self, width=640, height=480, focal_px=635.0, noise=2.0, seed=7, flat=False):
+    def __init__(self, width=640, height=480, focal_px=635.0, noise=2.0, seed=7, flat=False,
+                 world: tuple[float, float, float, float] | None = None):
+        """world = (east_min, east_max, north_min, north_max) metres of ground (default the 24 m square
+        around the start); beyond it the texture is mirrored, which reverses the apparent motion."""
         self.w, self.h, self.f, self.noise = width, height, focal_px * width / 640, noise
-        self.tex = ground_texture(seed, flat=flat)
-        self.half = self.tex.shape[0] * TEXEL_M / 2
+        if world is None:
+            self.tex = ground_texture(seed, flat=flat)
+            half = self.tex.shape[0] * TEXEL_M / 2
+            self.e0, self.n1 = -half, half
+        else:
+            self.tex = ground_texture(seed, flat=flat, shape_m=(world[1] - world[0], world[3] - world[2]))
+            self.e0, self.n1 = world[0], world[3]
         u, v = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
         self.du, self.dv = u - width / 2 + 0.5, height / 2 - v - 0.5
         self.rng = np.random.default_rng(seed + 1)
@@ -76,8 +87,8 @@ class Renderer:
         c, s = math.cos(math.radians(p.heading)), math.sin(math.radians(p.heading))
         e = p.east + right * c + fwd * s
         n = p.north - right * s + fwd * c
-        mx = ((e + self.half) / TEXEL_M).astype(np.float32)
-        my = ((self.half - n) / TEXEL_M).astype(np.float32)
+        mx = ((e - self.e0) / TEXEL_M).astype(np.float32)
+        my = ((self.n1 - n) / TEXEL_M).astype(np.float32)
         img = cv2.remap(self.tex, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
         gain = 1.0 + 0.03 * math.sin(2 * math.pi * 0.3 * p.t)
         out = img.astype(np.float32) * gain
@@ -189,11 +200,14 @@ def main(argv=None):
     ap.add_argument("--start", default="2026-10-22T14:00:00Z")
     ap.add_argument("--nmea", action="store_true", help="also write nmea.nmea for the same walk (fake_l86)")
     ap.add_argument("--nmea-args", default="", help="extra fake_l86 arguments, e.g. '--spoof drift --spoof-cn0 natural'")
+    ap.add_argument("--world", default=None, help="E0:E1:N0:N1 metres of ground (default 24 m square), e.g. -4:34:-3:3")
     a = ap.parse_args(argv)
     start = datetime.fromisoformat(a.start.replace("Z", "+00:00")).astimezone(timezone.utc)
     traj = Trajectory(a.walk, a.straight, a.height_m, a.sway_deg, a.bob_m, a.mount_yaw_deg, still_s=a.still_s)
     out = Path(a.out)
-    n = write_session(out, traj, Renderer(focal_px=a.true_focal_px, noise=a.noise), a.duration_s, a.fps, start)
+    world = tuple(float(x) for x in a.world.split(":")) if a.world else None
+    n = write_session(out, traj, Renderer(focal_px=a.true_focal_px, noise=a.noise, world=world), a.duration_s, a.fps,
+                      start)
     print(f"wrote {out}: {n} frames")
     if a.nmea:
         walk_at(None, 0)                                  # loads fake_l86

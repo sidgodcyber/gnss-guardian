@@ -8,6 +8,8 @@
                                        [--video video.avi [--frames frames.csv | --video-start ISO]]
     python -m gnss_guardian.cli status --data session/live
     python -m gnss_guardian.cli calibrate --video walk/video.avi --distance 10 [--height 1.0] [--dry-run]
+    python -m gnss_guardian.cli calibrate --live --distance 5 [--camera picam]     (on the Pi, on the road)
+    python -m gnss_guardian.cli field-demo --out session/NAME [--l86 /dev/serial0] [--port 8080]
     python -m gnss_guardian.cli vision-bench [--video FILE] [--frames 300] [--scale 0.5] [--threads N]
 """
 from __future__ import annotations
@@ -141,18 +143,27 @@ def status(folder, every, once):
 
 
 @cli.command()
-@click.option("--video", required=True, type=click.Path(exists=True, dir_okay=False),
+@click.option("--video", default=None, type=click.Path(exists=True, dir_okay=False),
               help="Video of a straight walk of known length (tools/record_session.py).")
-@click.option("--distance", required=True, type=float, help="True length of the walk in metres (tape-measured).")
+@click.option("--live", "live_cam", is_flag=True,
+              help="Use the camera now (on the Pi): Enter at the start mark, push the rig, Enter at the end mark.")
+@click.option("--camera", default=None, help="With --live: auto | picam | usb:N (default: config camera.source).")
+@click.option("--distance", required=True, type=float,
+              help="True length of the walk in metres (tape-measured; 5 or 10 m pushed on the road).")
 @click.option("--height", default=None, type=float, help="Camera height above ground in m (default: config camera.height_m).")
 @click.option("--dry-run", is_flag=True, help="Print the fit, do not write config/calibration.yaml.")
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
-def calibrate(video, distance, height, dry_run, config_path):
+def calibrate(video, live_cam, camera, distance, height, dry_run, config_path):
     """Fit the camera focal length (metres per pixel at the working height) from a measured walk."""
     from gnss_guardian.vision.calibrate import calibrate as fit
     from gnss_guardian.vision.calibrate import write_calibration
+    if bool(video) == bool(live_cam):
+        raise click.UsageError("give either --video FILE or --live")
     cfg = load_config(config_path)
-    r = fit(video, distance, cfg, height)
+    if live_cam:
+        r = _calibrate_live(cfg, camera or cfg["camera"]["source"], distance, height)
+    else:
+        r = fit(video, distance, cfg, height)
     click.echo(f"{r['true_m']} m walk measured {r['measured_m']} m (path {r['path_m']} m, straightness "
                f"{r['straightness']}); focal {r['previous_focal_px']} -> {r['focal_px']} px "
                f"(HFOV equivalent {r['hfov_deg_equivalent']} deg) at {r['height_m']} m; "
@@ -161,6 +172,65 @@ def calibrate(video, distance, height, dry_run, config_path):
         click.echo("warning: the walk was not straight (straightness < 0.95); repeat along a taped line")
     if not dry_run:
         click.echo(f"wrote {write_calibration(r, cfg)}")
+
+
+def _calibrate_live(cfg, spec, distance, height):
+    import threading
+
+    from gnss_guardian.vision.calibrate import calibrate_frames
+    from gnss_guardian.vision.camera import CameraUnavailable, open_camera
+    try:
+        src = open_camera(spec, cfg)
+    except (CameraUnavailable, ValueError) as e:
+        raise click.ClickException(f"camera {spec}: {e}") from e
+    try:
+        click.echo(f"camera {spec} open, {cfg['camera']['height_m'] if height is None else height} m up. Put the rig on "
+                   f"the start mark and press Enter.")
+        input()
+        done = threading.Event()
+
+        def wait_enter():
+            try:
+                input()
+                done.set()
+            except EOFError:                 # no terminal: run until the source ends
+                pass
+        threading.Thread(target=wait_enter, daemon=True).start()
+        click.echo(f"Push the rig straight {distance:g} m to the end mark, stop, then press Enter.")
+
+        def frames():
+            while not done.is_set():
+                fr = src.read()
+                if fr is None:
+                    return
+                yield fr
+        return calibrate_frames(frames(), distance, cfg, height, f"live camera {spec}",
+                                progress=lambda m, n: click.echo(f"\r  {m:5.2f} m measured ({n} frames)", nl=False))
+    finally:
+        click.echo("")
+        src.close()
+
+
+@cli.command("field-demo")
+@click.option("--out", required=True, type=click.Path(file_okay=False), help="Session folder, e.g. session/road1.")
+@click.option("--l86", "port", default="/dev/serial0", show_default=True)
+@click.option("--port", "http_port", default=8080, show_default=True, type=click.IntRange(1, 65535),
+              help="Overlay stream, guidance page and live.json.")
+@click.option("--camera", default=None, help="auto | picam | usb:N | video:FILE (default: config camera.source).")
+@click.option("--record/--no-record", default=True, show_default=True, help="Save overlay.mp4 in the session folder.")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--duration-s", default=None, type=float, help="Stop after this many seconds (default: Ctrl-C).")
+def field_demo(out, port, http_port, camera, record, config_path, duration_s):
+    """The road demo in one command: live with camera, overlay, guidance page and demo injection."""
+    from gnss_guardian.io.serial_live import run_live
+    cfg = load_config(config_path)
+    click.echo("GNSS Guardian field demo. Stand the rig still on the start point until the guidance page "
+               "shows home set and the home keyframe stored (warm-up 60 s + home 30 s).")
+    click.echo("Injected spoofs are DEMO ONLY (software, before the detector); raw/ keeps the real NMEA.")
+    s = run_live(port, 9600, out, cfg, camera=camera or cfg["camera"]["source"], overlay_port=http_port,
+                 overlay_record=record, demo_inject=True, duration_s=duration_s, echo=click.echo)
+    click.echo(f"epochs {s['epochs']}, states: {' -> '.join(s['states']) or '-'}")
+    click.echo(f"session: {out}  (gnss-guardian replay {out} --out {out}_replay  opens it in the dashboard)")
 
 
 @cli.command("vision-bench")

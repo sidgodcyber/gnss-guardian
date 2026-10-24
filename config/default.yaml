@@ -13,13 +13,16 @@ camera:                          # Pi Camera Rev 1.3 (OV5647), pointing straight
   width: 640
   height: 480
   fps: 30
+  max_exposure_us: 3000          # shutter cap (Pi camera): 1.5 m/s x 3 ms = 4.5 mm = 2.9 px of blur at 640 px,
+                                 #   1 m up; brightness then comes from gain (ExposureCap). null = libcamera auto
   hfov_deg: 53.5                 # OV5647 horizontal field of view (datasheet); calibrate refines focal_px
   height_m: 1.0                  # lens above the ground on the rig
   focal_px: null                 # fitted by `gnss-guardian calibrate` (at width px); null = from hfov_deg
   calibration_file: config/calibration.yaml   # merged over this file when present (written by calibrate)
 
 vision:
-  process_scale: 1.0             # flow on a downscaled image (0.5 = 320x240) if the CPU is slow
+  process_scale: 0.5             # flow on a downscaled image (0.5 = 320x240): Pi 4 bench 30 fps (camera-capped)
+                                 #   at 0.5 against 15.7 fps at 1.0, with GNSS live
   max_corners: 200               # Shi-Tomasi corners (RANSAC needs far fewer; LK cost scales with this)
   corner_quality: 0.01
   corner_min_dist_px: 8

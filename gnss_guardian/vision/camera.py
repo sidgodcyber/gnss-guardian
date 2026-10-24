@@ -40,10 +40,46 @@ def _fit(gray: np.ndarray, w: int, h: int) -> np.ndarray:
     return gray
 
 
-class PiCamera:
-    """Pi Camera Rev 1.3 (OV5647) through Picamera2/libcamera: YUV420, the Y plane is the grey image."""
+class ExposureCap:
+    """Keeps the shutter at or below max_us so a walk at ~1.5 m/s does not blur the ground (libcamera's
+    auto exposure has no plain upper limit). Auto exposure runs until it chooses a longer shutter; then
+    the shutter is fixed at max_us and the analogue gain servoes the mean brightness toward ``target``
+    (up to max_gain); when the gain is back at 1 and the image is still bright, auto exposure returns
+    (it will pick a shorter shutter by itself). Checked every ``every`` frames from the frame metadata."""
 
-    def __init__(self, width: int, height: int, fps: float, clock=time.monotonic):
+    def __init__(self, max_us: int, max_gain: float = 8.0, target: float = 110.0, every: int = 10):
+        self.max_us, self.max_gain, self.target, self.every = max_us, max_gain, target, every
+        self.manual = False
+        self.gain = 1.0
+        self.n = 0
+
+    def step(self, exposure_us: float | None, gain: float | None, mean: float) -> dict | None:
+        """Camera controls to apply now, or None."""
+        self.n += 1
+        if self.n % self.every or exposure_us is None:
+            return None
+        if not self.manual:
+            if exposure_us <= self.max_us * 1.05:
+                return None
+            self.manual = True                      # keep the brightness: move the extra exposure into gain
+            self.gain = min(self.max_gain, max(1.0, (gain or 1.0) * exposure_us / self.max_us))
+            return {"AeEnable": False, "ExposureTime": int(self.max_us), "AnalogueGain": round(self.gain, 2)}
+        if mean > 1.25 * self.target and self.gain <= 1.0:
+            self.manual = False
+            return {"AeEnable": True}
+        new = min(self.max_gain, max(1.0, self.gain * (self.target / max(mean, 1.0)) ** 0.5))
+        if abs(new - self.gain) / self.gain < 0.05:
+            return None
+        self.gain = new
+        return {"AnalogueGain": round(new, 2)}
+
+
+class PiCamera:
+    """Pi Camera Rev 1.3 (OV5647) through Picamera2/libcamera: YUV420, the Y plane is the grey image.
+    camera.max_exposure_us caps the shutter (ExposureCap); the shutter and gain in use are reported in
+    ``exposure`` (live mode logs them as camera_exposure events)."""
+
+    def __init__(self, width: int, height: int, fps: float, clock=time.monotonic, max_exposure_us: int | None = None):
         try:
             from picamera2 import Picamera2          # Raspberry Pi OS only (apt install python3-picamera2)
         except ImportError as e:
@@ -58,12 +94,27 @@ class PiCamera:
         self.cam.configure(conf)
         self.cam.start()
         self.idx = 0
+        self.cap = ExposureCap(int(max_exposure_us)) if max_exposure_us else None
+        self.exposure: dict = {"max_exposure_us": max_exposure_us, "exposure_us": None, "gain": None, "mode": "auto"}
 
     def read(self) -> Frame | None:
-        arr = self.cam.capture_array("main")
+        req = self.cam.capture_request()
+        try:
+            arr = req.make_array("main")
+            md = req.get_metadata()
+        finally:
+            req.release()
         t = self.clock()
         self.idx += 1
-        return Frame(self.idx - 1, t, np.ascontiguousarray(arr[:self.h, :self.w]))
+        gray = np.ascontiguousarray(arr[:self.h, :self.w])
+        exp, gain = md.get("ExposureTime"), md.get("AnalogueGain")
+        self.exposure.update(exposure_us=exp, gain=None if gain is None else round(gain, 2))
+        if self.cap is not None:
+            ctl = self.cap.step(exp, gain, float(gray[::8, ::8].mean()))
+            if ctl:
+                self.cam.set_controls(ctl)
+                self.exposure["mode"] = "capped" if self.cap.manual else "auto"
+        return Frame(self.idx - 1, t, gray)
 
     def close(self) -> None:
         self.cam.stop()
@@ -134,13 +185,14 @@ class CvCamera:
 def open_camera(spec: str, cfg: dict, clock=time.monotonic, frames_csv=None, start=None, pace=False):
     cam = cfg["camera"]
     w, h, fps = cam["width"], cam["height"], cam["fps"]
+    cap_us = cam.get("max_exposure_us")
     if spec == "auto":
         try:
-            return PiCamera(w, h, fps, clock)
+            return PiCamera(w, h, fps, clock, cap_us)
         except CameraUnavailable:
             spec = "usb:0"
     if spec == "picam":
-        return PiCamera(w, h, fps, clock)
+        return PiCamera(w, h, fps, clock, cap_us)
     if spec.startswith("usb:"):
         return CvCamera(int(spec[4:]), w, h, clock)
     if spec.startswith("video:"):

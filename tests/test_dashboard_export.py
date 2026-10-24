@@ -51,7 +51,7 @@ def test_spoof_demo_transitions(tmp_path, cfg):
     assert 118 <= spoofed["t"] <= 123 and "spoofing.speed" in spoofed["indicators"]
     assert all(i.startswith("spoofing.") for i in spoofed["indicators"])  # only detectors above CLEAR
     keys = {i["key"] for i in d["config"]["spoofing"]["indicators"]}
-    assert keys == {"speed", "time", "altitude", "uniform_cn0", "newcomers", "vision"}
+    assert keys == {"speed", "time", "altitude", "uniform_cn0", "newcomers", "vision", "vision_pos"}
     assert d["config"]["hysteresis"]["alarm_on"] == cfg["detect"]["hysteresis"]["alarm_on"]
     assert_no_coordinates(d)
 

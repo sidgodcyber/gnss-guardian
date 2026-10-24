@@ -1,10 +1,13 @@
 """Fit the camera scale from a walk of known length.
 
     gnss-guardian calibrate --video walk10m/video.avi --distance 10 [--height 1.0] [--dry-run]
+    gnss-guardian calibrate --live --distance 5 [--camera picam]     # on the Pi, on the road, Enter / Enter
 
-Walk a measured straight line (tape, 10 m) with the camera at its working height, standing still
-for a moment at both ends. The odometry measures the walk with the current focal length; the
-focal length is scaled so the measured straight-line displacement equals the true distance:
+Walk (or push the trolley) along a measured straight line (tape, 5 or 10 m) with the camera at its
+working height, standing still for a moment at both ends. --live runs the camera on the Pi itself:
+Enter at the start mark, push, Enter at the end mark. The odometry measures the walk with the
+current focal length; the focal length is scaled so the measured straight-line displacement equals
+the true distance:
 
     focal_new = focal_current x measured_m / true_m
 
@@ -28,20 +31,32 @@ from gnss_guardian.vision.odometry import VisualOdometry
 
 def calibrate(video: str | Path, distance_m: float, cfg: dict, height_m: float | None = None) -> dict:
     cam = cfg["camera"]
-    if height_m is not None:
-        cfg = {**cfg, "camera": {**cam, "height_m": height_m}}
     # frames.csv timestamps if present; otherwise any start time will do (only displacement matters)
     src = CvCamera(str(video), cam["width"], cam["height"], start=datetime(2000, 1, 1, tzinfo=timezone.utc))
+    try:
+        return calibrate_frames(iter(src.read, None), distance_m, cfg, height_m, str(video))
+    finally:
+        src.close()
+
+
+def calibrate_frames(frames, distance_m: float, cfg: dict, height_m: float | None = None, source: str = "",
+                     progress=None) -> dict:
+    """The fit over any sequence of camera Frames (a video, or the live camera until Enter)."""
+    cam = cfg["camera"]
+    if height_m is not None:
+        cfg = {**cfg, "camera": {**cam, "height_m": height_m}}
     vo = VisualOdometry(cfg)
     n = low = 0
     first = None
-    while (fr := src.read()) is not None:
+    for fr in frames:
         st = vo.step(fr.t, fr.gray)
         n += 1
         low += st["flag"] in ("low_texture", "vision_lost")
         if first is None:
             first = (vo.e, vo.n)
-    src.close()
+        if progress is not None and n % 15 == 0:
+            progress(math.hypot(vo.e - first[0], vo.n - first[1]), n)
+    video = source
     if n < 10:
         raise ValueError(f"{video}: only {n} frames")
     net = math.hypot(vo.e - first[0], vo.n - first[1])
