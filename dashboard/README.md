@@ -26,13 +26,15 @@ Deep links (also used for screenshots): `?session=NAME&tab=replay|logs&t=SECONDS
 
 | Panel | Source in dashboard.json |
 |---|---|
-| State ribbon, status cards | `timeline[].state` (derived; see below), GNSS fix / sats / HDOP / mean C/N0, detector levels, vision mode |
+| State ribbon, status cards | `timeline[].state` (from the pipeline's state machine), GNSS fix / sats / HDOP / mean C/N0, detector levels, vision mode, `fused` home distance and bearing |
 | Detection panel | `config` (indicator spans, weights, hysteresis from `config/default.yaml`), `timeline[].jamming/spoofing.parts`, `transitions` (scrubber markers) |
-| Tactical Map | `timeline[].gnss.e/n` (green), `timeline[].vision.e/n` (blue), `keyframes`; metres from home, no lat/lon |
+| Tactical Map | `timeline[].gnss.e/n` (green), `timeline[].vision.e/n` (blue), `fused` (ring), `routes` (dashed, while guiding) and the arrow to `guidance.waypoint`, `keyframes`; metres from home, no lat/lon |
 | Down-Cam VIO | `dashboard_video.webm`, synced through `timeline[].frame` |
-| Sensor Fusion / Integrity Monitor | `timeline[].gnss`, `timeline[].vision`, `timeline[].features` |
+| Sensor Fusion / Integrity Monitor | `timeline[].gnss`, `timeline[].vision`, `timeline[].features`, `fused`, `guidance`, `latch` (spoof-latch agreement progress) |
 | Flight Logs | `transitions`, `detector_levels`, `events` |
 
-The pipeline has no state machine yet (Phase 3), so the state is derived: SPOOFED / JAMMED on a
-detector ALARM (VISION_NAV while the camera dead-reckons), SUSPECT on any SUSPECT, GNSS_OK otherwise,
-WARM-UP before the baseline is ready. RETURN_HOME and HOME_REACHED are shown greyed out.
+The viewer works nothing out itself: the state, fused position, guidance and spoof-latch progress are
+what the pipeline's state machine (`gnss_guardian/state.py`) wrote to `epochs.jsonl`. Guidance is advisory,
+and the module never commands the aircraft. Sessions exported before Phase 3 (format 1) are refused with
+a message to run `gnss-guardian replay` again. `python tools/demo.py` builds `demo_jam` and `demo_spoof`
+and starts the viewer on them.

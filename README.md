@@ -13,8 +13,8 @@ an offline reference only ("reference, not used for navigation"), compared after
 |---|---|---|
 | 1 | Per-epoch GNSS health, jamming/spoofing scores with reasons and hysteresis, simulator profiles | **done** |
 | 2 | Vision odometry (optical flow, ORB keyframe terrain map), calibration, camera ↔ GNSS cross-check | **done** (synthetic ground only; real Pi camera walks pending) |
-| 3 | State machine, fused position, return home | next |
-| 4 | Dashboard, AI second opinion, phone comparison, demo scripts | |
+| 3 | State machine, fused position, return-home guidance, spoof latch release on vision agreement | **done** (synthetic walks only) |
+| 4 | Dashboard, AI second opinion, phone comparison, demo scripts | replay dashboard and `tools/demo.py` done |
 | 5 | Pi 4 setup script (camera, UART `dtoverlay=disable-bt`), systemd, field test kit | manual steps below |
 
 Forked in spirit from IonWatch. The NMEA parser, serial live loop, PMTK rate setup and serial simulator
@@ -42,6 +42,19 @@ One-shot demo: render a simulated walk with a ramp jam and recovery, then replay
 ```
 
 Every replay also writes `session/NAME/dashboard.json` for the offline replay viewer: `cd dashboard; npm ci; npm run dev`, then open http://127.0.0.1:3000 (see [dashboard/README.md](dashboard/README.md)).
+
+Phase 3 demo in one command: renders an out-and-back walk, simulates a jam and a spoof near the far end,
+replays both with the camera through the state machine (session/demo_jam, session/demo_spoof) and starts
+the dashboard (about 3.5 min on this laptop before the dashboard starts; `--no-dashboard` to build only,
+`--port N` if 3000 is taken, `--open` to open the browser). It shortens the warm-up to 20 s and the home
+window to 5 s through `demo/demo.yaml`; all other thresholds are the defaults.
+```powershell
+.venv\Scripts\python tools\demo.py
+```
+```
+demo_jam:   WARMING_UP -> GNSS_OK -> JAMMED -> VISION_NAV -> RETURN_HOME -> HOME_REACHED -> GNSS_OK
+demo_spoof: WARMING_UP -> GNSS_OK -> SPOOFED -> VISION_NAV -> RETURN_HOME -> HOME_REACHED -> GNSS_OK
+```
 
 Live demo through the serial path (the simulator serves `socket://`, the Windows stand-in for `/dev/serial0`):
 ```powershell
@@ -93,7 +106,8 @@ Each detector moves through CLEAR → SUSPECT → ALARM with hysteresis:
 
 - **ALARM** on 2 consecutive epochs ≥ 0.6, or 1 epoch ≥ 0.8.
 - **Leaving ALARM** needs 5 s below 0.3.
-- **Spoof latch:** a spoof alarm stays at least 30 s; Phase 3 releases it on vision agreement.
+- **Spoof latch:** a spoof alarm stays at least 30 s. With a camera, the Phase 3 state machine holds it
+  until GNSS and the camera agree, and then releases it (see below).
 
 Every verdict lists its reasons. GNSS is "trusted" only when the baseline is warm, the fix valid and both
 detectors are CLEAR. ANTSTATUS (`GPTXT`/`PGTOP`) is logged; OPEN/SHORT is reported as a hardware fault,
@@ -161,9 +175,56 @@ home is confirmed when the home keyframe matches within 1.5 m. Thumbnails go to
 | 60 m loop with four corners, odometry only | 0.03–0.08 m closure, heading ≤ 0.3° (10–30 fps) |
 | GNSS-denied lap with a 12 % calibration error | worst 1.44 m dead reckoning → 0.67 m with keyframe matches; home confirmed |
 | Calibration from a 10 m walk (true focal 635 px, start 700 px) | fitted 634.8 px |
-| Vision vs GNSS position while trusted | median 0.09 m, max 0.66 m (corners) |
+| Vision vs GNSS position while trusted (heading aligned) | median 0.09 m, max 0.71 m (corners) |
 | Frame rate, this laptop (i5-8365U), 640×480 | odometry 68–130 fps all cores, 48–57 fps one core; with ORB matching 55–84 fps |
 | Frame rate, Pi 4 | **not measured** until `gnss-guardian vision-bench` runs on the Pi 4 (no estimate is quoted; try `--scale 0.5` too). |
+
+## What Phase 3 does (state, fused position, return home)
+
+One state per GNSS epoch, from the detector levels and the camera track ([gnss_guardian/state.py](gnss_guardian/state.py),
+thresholds in `state:` and `guidance:` of [config/default.yaml](config/default.yaml)):
+
+```
+WARMING_UP -> GNSS_OK <-> SUSPECT -> JAMMED | SPOOFED -> VISION_NAV -> RETURN_HOME <-> HOME_REACHED
+                 ^                         |________________________________________________|
+                 |___________________ release (jamming: detectors CLEAR; spoofing: agreement) |
+```
+
+- **JAMMED / SPOOFED** on a detector ALARM (spoofing wins; a spoof during a jam turns the cause to
+  spoofing). From here the state leaves only through the release rule.
+- **VISION_NAV** once the camera dead-reckons from the last trusted fix: heading aligned, track not lost.
+- **RETURN_HOME** after 2 s of a healthy camera track. Guidance is **advisory output only**: bearing
+  (degrees from true north) and distance to home from the fused position, and the next waypoint on the
+  reverse breadcrumb path: the keyframes stored while GNSS was trusted, from the one nearest the current
+  position back to home. The module never commands the aircraft.
+- **HOME_REACHED** when the camera position is within 2 m of home and the home keyframe matched within
+  the last 3 s (radius only when there is no home keyframe). Leaving by more than 4 m resumes guidance.
+  A held position (camera track lost) never counts as arrival.
+- **Fused position:** GNSS while trusted; otherwise the camera's dead reckoning anchored at the last
+  trusted fix; `vision_stale` (held, not extrapolated) when the camera track stops on low texture;
+  `last_fix` (held) without a camera.
+- **Release:** a jam ends when both detectors are CLEAR. A spoof ends only after GNSS and the camera agree
+  for 10 s in a row: position within 3 m, velocity within 0.3 m/s, spoofing score below 0.3,
+  jamming CLEAR, fix valid. Until then GNSS stays untrusted even when the detector clears by itself,
+  so a spoofer that turns quiet does not become the anchor. On release the detector's latch is
+  dropped too. Without a camera the detector's 30 s latch decides.
+- **Output:** each epoch in `epochs.jsonl` carries `state`, `cause`, `fused`, `guidance` and `latch`.
+  `events.jsonl` gets `state` (with reasons), `guidance` (the route) and `waypoint` events. The
+  dashboard and `gnss-guardian status` read them.
+
+Two Phase 2 fixes came out of this. Keyframes other than home are stored only once the heading is aligned
+to the GNSS course; before that the track runs in an arbitrary direction, and one keyframe of a 12 m east
+walk sat 2 m north. The home keyframe is skipped if the rig has already moved more than 1.5 m from home.
+
+### Measured (rendered out-and-back walk, simulated GNSS; nothing here is field data)
+
+| Test | Result |
+|---|---|
+| Clean loop with camera | GNSS_OK throughout, fused = GNSS |
+| Jam (fix lost) 9 s into a 12 m out-and-back walk | JAMMED → VISION_NAV 1 s → RETURN_HOME 2 s later → HOME_REACHED in the epoch of the true arrival → GNSS_OK after recovery |
+| Spoof: 500 m jump, natural C/N0 | same chain; GNSS kept untrusted while the detector had cleared itself and GNSS was still 500 m off; released 11 s after the spoof ended (10 s of agreement) |
+| Camera position on the way back | max 0.44 m from truth (rendered ground, correct calibration) |
+| Ground turns smooth while walking, GNSS jammed | rig walked 4.8 m, fused position moved 0.00 m (`vision_stale`); never guided home on a frozen track |
 
 ## Limits (read before quoting results)
 
@@ -175,6 +236,9 @@ home is confirmed when the home keyframe matches within 1.5 m. Thumbnails go to
   scale. A gimbal would help.
 - **Low texture** (smooth concrete, water, darkness) stops the vision track (`vision_lost`) rather than
   guessing. Daylight and a short exposure are needed against motion blur.
+- **Phase 3 is tested on scripted walks only.** The synthetic walker returns along a pre-rendered path; it
+  does not follow the guidance. The state timers, home radius and agreement thresholds are set from
+  these walks. A spoofer that stays within 3 m and 0.3 m/s of the camera for 10 s would be released.
 
 - **Jamming vs blockage:** the L86 reports no AGC or noise floor, so RF jamming, foil, buildings and dense
   canopy are indistinguishable from NMEA. The detector says "GNSS denied: jamming or blockage". For
@@ -255,19 +319,22 @@ gnss_guardian/
   vision/flow.py           Shi-Tomasi + pyramidal LK + RANSAC similarity, bridging, ORB fallback
   vision/odometry.py       camera track and heading, GNSS-course alignment
   vision/terrain.py        ORB keyframe map, keyframe and home matching
-  vision/nav.py            VisionNav: anchoring to trusted GNSS, corrections, observe_vision feed
+  vision/nav.py            VisionNav: anchoring to trusted GNSS, corrections, observe_vision feed, breadcrumbs
+  state.py                 Phase 3: state machine, fused position, return-home guidance, spoof latch release
   vision/calibrate.py      focal length from a measured walk      vision/bench.py  frame-rate benchmark
   run.py session.py home.py status.py cli.py
 tools/fake_l86.py          serial simulator with jam/spoof/walk profiles, --write for files
 tools/synth_walk.py        rendered downward-camera walks (video + frames.csv + truth + matching NMEA)
+tools/demo.py              jam + spoof demo sessions with the camera, then the dashboard, in one command
 tools/record_nmea.py       standalone NMEA recorder for the Pi
 tools/record_session.py    standalone camera + NMEA recorder for the Pi
 tools/make_proxy_fixture.py  phone log -> L86-style proxy NMEA (needs an IonWatch checkout; offline)
 ```
 
 Session output: `session/<name>/session.json` (run info, home), `epochs.jsonl` (one verdict per epoch),
-`events.jsonl` (level changes, home, serial, receiver, camera and keyframe events), `latest.json`,
-`raw/`, `keyframes/`. With a camera, each epoch also carries a `vision` block (position at the epoch's
-time, heading, quality, mode, keyframe match, home confirmation).
+`events.jsonl` (level and state changes, return-home route and waypoints, home, serial, receiver, camera
+and keyframe events), `latest.json`, `raw/`, `keyframes/`. Each epoch carries `state`, `cause`, `fused`,
+`guidance` and `latch`. With a camera it also carries a `vision` block (position at the epoch's time,
+heading, quality, mode, keyframe match, home confirmation).
 
 Pins: `pandas<3`, `numpy<2.5` (kept from IonWatch), `opencv-python-headless<5` (the Pi's apt OpenCV is 4.x).
