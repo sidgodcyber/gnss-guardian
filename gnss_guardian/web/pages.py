@@ -54,9 +54,9 @@ body{display:flex;flex-direction:column;min-height:100vh;padding:12px 16px env(s
     <button onclick="inject('jump')">Jump</button></div>
   <div class="row">drift <input id="dv" type="number" value="0.5" step="0.1" min="0.1"> m/s at <input id="db" type="number" value="90"> deg
     <button onclick="inject('drift')">Drift</button></div>
-  <div class="row"><button class="stop" onclick="inject('stop')">Stop injection</button> <small id="injmsg"></small></div>
   <div class="row">sky: azimuths +<input id="sr" type="number" value="15" min="0" max="180"> deg,
     <input id="sg" type="number" value="2" min="0" max="4"> ghost sats <button onclick="inject('sky')">Sky</button></div>
+  <div class="row"><button class="stop" onclick="inject('stop')">Stop injection</button> <small id="injmsg"></small></div>
 </div>
 <div id="home"><h1>HOME REACHED</h1><p id="homep">home keyframe matched</p></div>
 <script>
@@ -115,11 +115,11 @@ async function inject(kind){
   let q='';
   if(kind==='jump')q=`?m=${$('jm').value}&bearing=${$('jb').value}`;
   if(kind==='drift')q=`?mps=${$('dv').value}&bearing=${$('db').value}`;
+  if(kind==='sky')q=`?rot=${$('sr').value}&ghosts=${$('sg').value}`;
   try{const r=await fetch('/inject/'+kind+q,{method:'POST'});const j=await r.json();
     $('injmsg').textContent=r.ok?(kind==='stop'?'stopped':'started'):(j.error||r.status)}
   catch(e){$('injmsg').textContent='failed: '+e}
 }
-  if(kind==='sky')q=`?rot=${$('sr').value}&ghosts=${$('sg').value}`;
 poll();setInterval(poll,1000);
 </script></body></html>
 """
