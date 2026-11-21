@@ -241,3 +241,46 @@ class SkyCheck:
             f["sky_impossible"] = len(impossible)
         f["sky_impossible_prns"] = sorted(impossible)
         return f
+
+
+def report(lines, cfg: dict) -> dict:
+    """Sky check over a recording (rule engine, AI off): does the receiver give GPS az/el, how far is the
+    reported sky from the almanac (median / max of the per-epoch median), how often satellites that should
+    be below the horizon are tracked, and the SUSPECT / ALARM epochs and episodes of both detectors."""
+    import copy
+    import statistics
+
+    from gnss_guardian.detect.engine import DetectionEngine
+    from gnss_guardian.io.epochs import epochs_from_lines
+    c = copy.deepcopy(cfg)
+    c.setdefault("ai", {})["enabled"] = False
+    eng = DetectionEngine(c)
+    n = n_azel = n_impossible = 0
+    errs, prns = [], set()
+    counts = {d: {"SUSPECT": 0, "ALARM": 0, "episodes": 0} for d in ("jamming", "spoofing")}
+    prev = {"jamming": "CLEAR", "spoofing": "CLEAR"}
+    talkers = set()
+    for ep in epochs_from_lines(lines, c):
+        v = eng.update(ep)
+        n += 1
+        gps = [s for k, s in ep.sats.items() if k.startswith("G")]
+        if any(math.isfinite(s.elev) and math.isfinite(s.az) for s in gps):
+            n_azel += 1
+        f = v["features"]
+        if f.get("sky_err_deg") is not None:
+            errs.append(f["sky_err_deg"])
+        if f.get("sky_impossible"):
+            n_impossible += 1
+            prns.update(f.get("sky_impossible_prns") or [])
+        for d in counts:
+            lv = v[d]["level"]
+            if lv in ("SUSPECT", "ALARM"):
+                counts[d][lv] += 1
+                counts[d]["episodes"] += prev[d] == "CLEAR"
+            prev[d] = lv
+    st = eng.features.sky.status
+    return {"epochs": n, "epochs_gps_azel": n_azel, "epochs_sky_judged": len(errs),
+            "sky_err_median_deg": round(statistics.median(errs), 2) if errs else None,
+            "sky_err_max_deg": round(max(errs), 2) if errs else None,
+            "epochs_impossible": n_impossible, "impossible_prns": sorted(prns),
+            "detectors": counts, "sky_check": st.get("reason"), "sky_enabled": st.get("enabled")}

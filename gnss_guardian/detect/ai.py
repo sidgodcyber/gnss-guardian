@@ -13,11 +13,12 @@ recording's quiet features do not make every small wobble look huge.
 
 Two models, one JSON file, both scored with numpy only (no scikit-learn on the Pi at run time):
   iforest       scikit-learn IsolationForest at training time, its trees exported to JSON; score is
-                2^(-mean path length / c(max_samples)), exactly sklearn's -score_samples. Kept only if
-                it separates a one-feature outlier (below) from its own training epochs; otherwise the
-                model says why (trained.iforest_rejected) and carries Mahalanobis only.
-  mahalanobis   robust centre, shrunk covariance; always trained. Used when the model has no forest,
-                or with ai.backend: mahalanobis
+                2^(-mean path length / c(max_samples)), exactly sklearn's -score_samples
+  mahalanobis   robust centre, shrunk covariance; always fitted
+Both get the single-feature outlier check on the training epochs (does one feature full_z robust SD out
+score above the training calib_quantile?). The model keeps the ones that pass and runs the chosen one:
+Mahalanobis (default) if it passes, else the forest. trained.checks has both results, trained.selection
+the data the choice was made on (the model label).
 Both are calibrated the same way (ai.train): score 0 at the calib_quantile of the training epochs'
 model scores, 1 at the model score of a point that is full_z robust SD from the clean centre in one
 feature (median over the features and both signs), so 1 means "as unusual as one feature far out".
@@ -141,7 +142,24 @@ def _outliers(mu: np.ndarray, full_z: float) -> np.ndarray:
     return np.vstack([np.eye(k) * full_z, -np.eye(k) * full_z]) + mu
 
 
+def _check(scores: np.ndarray, ref: np.ndarray, q: float, full_z: float) -> dict:
+    """Single-feature outlier check: does one feature full_z robust SD out score above the training quantile?"""
+    out = {"train_q": round(float(np.quantile(scores, q)), 4), "outlier_median": round(float(np.median(ref)), 4)}
+    try:
+        out["calib"] = _calib(scores, ref, q)
+        out["passed"] = True
+    except ValueError:
+        out["passed"] = False
+    out["detail"] = (f"one feature {full_z:g} robust SD out scores {out['outlier_median']:.3f} vs the training "
+                     f"{q} quantile {out['train_q']:.3f}: {'passed' if out['passed'] else 'failed'}")
+    return out
+
+
 def train(X: np.ndarray, cfg: dict, label: str, sources: list[str] | None = None, backend: str = "auto") -> dict:
+    """Both models are fitted (the forest when scikit-learn is installed) and both get the single-feature
+    outlier check on these training epochs. Kept: the ones that pass. Chosen: Mahalanobis (the default)
+    if it passes, else the forest; ``backend`` forces one (an error if it fails). ``trained.selection``
+    says on which data (``label``) the choice was made."""
     t = cfg["ai"]["train"]
     X = np.asarray(X, dtype=float)
     if len(X) < t["min_epochs"]:
@@ -152,43 +170,50 @@ def train(X: np.ndarray, cfg: dict, label: str, sources: list[str] | None = None
     floor = np.array([t["scale_floor"][k] for k in FEATURES], dtype=float)
     scale = np.maximum(np.where(np.isfinite(mad), mad, 0.0), floor)
     Z = _z(X, center, scale)
+    R = _outliers(np.median(Z, axis=0), t["full_z"])
+    q = t["calib_quantile"]
     cov = np.cov(Z.T)
     a = t["shrink"]
     cov = (1 - a) * cov + a * np.eye(len(FEATURES)) * max(float(np.trace(cov)) / len(FEATURES), 1e-6)
     inv = np.linalg.inv(cov)
     mu = Z.mean(axis=0)
-    d = np.sqrt(np.einsum("ij,jk,ik->i", Z - mu, inv, Z - mu))
-    R = _outliers(np.median(Z, axis=0), t["full_z"])
-    dr = np.sqrt(np.einsum("ij,jk,ik->i", R - mu, inv, R - mu))
-    model = {"format": FORMAT, "label": label, "features": list(FEATURES),
-             "center": center.round(6).tolist(), "scale": scale.round(6).tolist(),
-             "mahalanobis": {"mean": mu.round(6).tolist(), "inv_cov": inv.round(8).tolist(),
-                             "calib": _calib(d, dr, t["calib_quantile"])},
-             "iforest": None,
-             "trained": {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "epochs": len(X),
-                         "sources": sources or [], "sklearn": None}}
+    maha = lambda M: np.sqrt(np.einsum("ij,jk,ik->i", M - mu, inv, M - mu))   # noqa: E731
+    checks = {"mahalanobis": _check(maha(Z), maha(R), q, t["full_z"])}
+    fits = {"mahalanobis": {"mean": mu.round(6).tolist(), "inv_cov": inv.round(8).tolist()}}
+    sk = None
     if backend in ("auto", "iforest"):
         try:
             import sklearn
             from sklearn.ensemble import IsolationForest
+            sk = sklearn.__version__
         except ImportError:
             if backend == "iforest":
                 raise
-            return model                                   # Mahalanobis only (no scikit-learn here)
-        f = IsolationForest(n_estimators=t["n_estimators"], max_samples=min(t["max_samples"], len(Z)),
-                            random_state=t["seed"]).fit(Z)
-        forest = export_forest(f)
-        model["trained"]["sklearn"] = sklearn.__version__
-        try:
-            forest["calib"] = _calib(_iforest_scores(forest, Z), _iforest_scores(forest, R), t["calib_quantile"])
-        except ValueError as e:                          # kept out: Mahalanobis carries the model
-            if backend == "iforest":
-                raise ValueError(f"IsolationForest rejected: {e}") from e
-            model["trained"]["iforest_rejected"] = (
-                f"{e}: one feature {t['full_z']} robust SD out scores {float(np.median(_iforest_scores(forest, R))):.3f}, "
-                f"below the training {t['calib_quantile']} quantile {float(np.quantile(_iforest_scores(forest, Z), t['calib_quantile'])):.3f}")
-            return model
-        model["iforest"] = forest
+        if sk:
+            f = IsolationForest(n_estimators=t["n_estimators"], max_samples=min(t["max_samples"], len(Z)),
+                                random_state=t["seed"]).fit(Z)
+            fits["iforest"] = export_forest(f)
+            checks["iforest"] = _check(_iforest_scores(fits["iforest"], Z), _iforest_scores(fits["iforest"], R),
+                                       q, t["full_z"])
+    passed = [k for k in ("mahalanobis", "iforest") if k in checks and checks[k]["passed"]]
+    if backend != "auto":
+        if backend not in passed:
+            raise ValueError(f"{backend} failed the outlier check: {checks[backend]['detail']}")
+        chosen = backend
+    elif passed:
+        chosen = passed[0]
+    else:
+        raise ValueError("neither model separates a single-feature outlier from the training epochs: "
+                         + "; ".join(f"{k} {c['detail']}" for k, c in checks.items()))
+    model = {"format": FORMAT, "label": label, "features": list(FEATURES), "chosen": chosen,
+             "center": center.round(6).tolist(), "scale": scale.round(6).tolist(),
+             "mahalanobis": None, "iforest": None,
+             "trained": {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "epochs": len(X),
+                         "sources": sources or [], "sklearn": sk,
+                         "checks": {k: {kk: v for kk, v in c.items() if kk != "calib"} for k, c in checks.items()},
+                         "selection": f"{chosen}, chosen by the single-feature outlier check on: {label}"}}
+    for k in passed:
+        model[k] = {**fits[k], "calib": checks[k]["calib"]}
     return model
 
 
@@ -236,11 +261,12 @@ class AIModel:
         self.m = model
         self.label = model["label"]
         self.center, self.scale = np.array(model["center"]), np.array(model["scale"])
-        if backend == "iforest" and not model.get("iforest"):
-            raise ValueError("the model has no IsolationForest (trained without scikit-learn)")
-        self.backend = "iforest" if backend in ("auto", "iforest") and model.get("iforest") else "mahalanobis"
-        mh = model["mahalanobis"]
-        self._mu, self._inv = np.array(mh["mean"]), np.array(mh["inv_cov"])
+        if backend in ("iforest", "mahalanobis") and not model.get(backend):
+            raise ValueError(f"the model has no {backend} part (it failed the outlier check or was not trained)")
+        self.backend = model.get("chosen", "mahalanobis") if backend == "auto" else backend
+        if self.backend == "mahalanobis":
+            mh = model["mahalanobis"]
+            self._mu, self._inv = np.array(mh["mean"]), np.array(mh["inv_cov"])
         self.calib = model[self.backend]["calib"]
 
     def raw(self, z: np.ndarray) -> float:

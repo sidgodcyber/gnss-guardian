@@ -1,8 +1,9 @@
 """AI second opinion (gnss_guardian/detect/ai.py): anomaly model of clean epochs, advisory only.
 
   export       the IsolationForest exported to JSON scores exactly like sklearn (skipped without sklearn)
-  training     Mahalanobis always; the forest kept only if it separates a one-feature outlier, else the
-               model says why; Mahalanobis only without scikit-learn; too few epochs refused
+  training     both models get the single-feature outlier check; kept exactly when they pass, Mahalanobis
+               chosen when it passes (default), the data of the choice recorded; Mahalanobis only
+               without scikit-learn; too few epochs refused
   clean        a simulator walk with another seed and route: zero AI SUSPECT
   attack       sudden jam: AI SUSPECT within 3 s with reason codes
   combine      corroboration only raises the spoofing score, only while the rule score >= 0.35; on every
@@ -77,13 +78,21 @@ def test_forest_export_matches_sklearn():
 def test_training_models(model_path, monkeypatch):
     m = json.loads(model_path.read_text())
     assert m["format"] == ai.FORMAT and m["label"] == LABEL and m["trained"]["epochs"] >= 700
-    assert m["mahalanobis"]["calib"]["full"] > m["mahalanobis"]["calib"]["q"]
-    assert m["iforest"] is not None or "iforest_rejected" in m["trained"]     # kept, or the reason why not
-    print("forest:", "kept" if m["iforest"] else m["trained"]["iforest_rejected"])
+    ch = m["trained"]["checks"]
+    print("outlier check:", {k: c["detail"] for k, c in ch.items()})
+    for k in ("mahalanobis", "iforest"):                                     # kept exactly when it passed
+        if k in ch:
+            assert (m[k] is not None) == ch[k]["passed"]
+            if ch[k]["passed"]:
+                assert m[k]["calib"]["full"] > m[k]["calib"]["q"]
+    assert m["chosen"] == ("mahalanobis" if ch["mahalanobis"]["passed"] else "iforest")   # Mahalanobis default
+    assert m["trained"]["selection"].endswith(f"on: {LABEL}")
+    assert ai.AIModel(m).backend == m["chosen"]
     X = np.random.default_rng(1).normal(size=(400, len(ai.FEATURES)))
     monkeypatch.setitem(__import__("sys").modules, "sklearn", None)           # no scikit-learn (as on the Pi)
     mh = ai.train(X, base_cfg(), "x")
     assert mh["iforest"] is None and mh["trained"]["sklearn"] is None
+    assert list(mh["trained"]["checks"]) == ["mahalanobis"]
     assert ai.AIModel(mh).backend == "mahalanobis"
     with pytest.raises(ValueError, match="clean epochs"):
         ai.train(X[:10], base_cfg(), "x")

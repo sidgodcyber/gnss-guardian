@@ -12,6 +12,7 @@
     python -m gnss_guardian.cli field-demo --out session/NAME [--l86 /dev/serial0] [--port 8080]
     python -m gnss_guardian.cli outputs-test [--safe-action] [--uno /dev/ttyACM0]     (LED / Uno wiring check)
     python -m gnss_guardian.cli ai-train FILE.nmea... --label "real L86, 40 min" [--first-min 40] [--out models/ai_model.json]
+    python -m gnss_guardian.cli sky-report FILE.nmea... [--almanac data/almanac.yuma]
     python -m gnss_guardian.cli ai-eval FILE.nmea... [--skip-min 40] [--model models/ai_model.json]
     python -m gnss_guardian.cli vision-bench [--video FILE] [--frames 300] [--scale 0.5] [--threads N]
 """
@@ -366,9 +367,9 @@ def ai_train(files, label, out, first_min, skip_min, backend, config_path):
     except (ValueError, ImportError) as e:
         raise click.ClickException(str(e)) from e
     ai.save(model, out)
-    rej = model["trained"].get("iforest_rejected")
-    kinds = ("IsolationForest + Mahalanobis" if model["iforest"] else
-             f"Mahalanobis only (IsolationForest rejected: {rej})" if rej else "Mahalanobis only (no scikit-learn)")
+    click.echo(f"model chosen on: {label}")
+    ch = model["trained"]["checks"]
+    kinds = f"runs {model['chosen']}; outlier check: " + "; ".join(f"{k} {c['detail']}" for k, c in ch.items())
     click.echo(f"{out}: {kinds}, {len(X)} clean epochs, label: {label}")
 
 
@@ -401,6 +402,33 @@ def ai_eval(files, model, first_min, skip_min, backend, config_path):
                    f"in {r['ai_suspect_episodes']} episodes ({rate}), score median {r['score_median']} p99 "
                    f"{r['score_p99']} max {r['score_max']}; spoofing ALARM epochs {r['spoof_alarm_epochs']} "
                    f"(rule only {r['spoof_alarm_epochs_rule_only']}) [{r['backend']}, {r['model']}]")
+
+
+@cli.command("sky-report")
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--almanac", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="GPS YUMA almanac within 14 days of the recording (default: config detect.sky.almanac_file).")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
+def sky_report(files, almanac, config_path):
+    """Sky check over recordings: GPS az/el present?, sky error vs the almanac, false SUSPECT / ALARM counts."""
+    from gnss_guardian.detect import sky
+    cfg = load_config(config_path)
+    if almanac:
+        cfg["detect"]["sky"]["almanac_file"] = str(almanac)
+    for f in files:
+        r = sky.report(_read_lines(f), cfg)
+        d = r["detectors"]
+        click.echo(f"{f}: {r['epochs']} epochs ({r['epochs'] / 60:.1f} min at 1 Hz)")
+        click.echo(f"  sky check: {'ON' if r['sky_enabled'] else 'OFF'} ({r['sky_check']})")
+        click.echo(f"  GPS az/el in GSV: {'yes' if r['epochs_gps_azel'] else 'NO'} ({r['epochs_gps_azel']} epochs); "
+                   f"sky judged in {r['epochs_sky_judged']} epochs")
+        if r["epochs_sky_judged"]:
+            click.echo(f"  sky error vs almanac: median {r['sky_err_median_deg']} deg, max {r['sky_err_max_deg']} deg")
+        click.echo(f"  below-horizon satellites tracked: {r['epochs_impossible']} epochs "
+                   f"{' '.join(r['impossible_prns'])}".rstrip())
+        for k in ("spoofing", "jamming"):
+            click.echo(f"  {k}: SUSPECT {d[k]['SUSPECT']} epochs, ALARM {d[k]['ALARM']} epochs, "
+                       f"{d[k]['episodes']} episodes")
 
 
 def main():

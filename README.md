@@ -399,11 +399,14 @@ epochs). The rule detectors stay in charge:
 - **The model on disk says what it was trained on,** and that label travels with every output.
   `models/ai_model.json` is currently **provisional, not real L86** (a 30 min simulator walk and the two phone
   proxies). Nothing measured with it goes in the tables above.
-- **Two methods, numpy only on the Pi:** `ai-train` fits an IsolationForest (scikit-learn, laptop) and a
-  Mahalanobis model (always), both exported to JSON. The forest is kept only if it separates a single feature
-  8 robust SD out from its own training epochs. On the provisional data it does not (one far-out feature scores
-  below the training 99.5 % quantile: each shallow tree splits on few of the 11 features), so the model carries
-  Mahalanobis only and records why (`trained.iforest_rejected`). This is re-checked on the real recording.
+- **Two methods, numpy only on the Pi:** `ai-train` fits a Mahalanobis model (always) and an IsolationForest
+  (scikit-learn, laptop), both exported to JSON. Both get the same check on the training epochs: does a point
+  with one feature 8 robust SD out score above the training 99.5 % quantile? The model keeps the ones that pass
+  and runs Mahalanobis (the default) if it passes, else the forest; `trained.checks` holds both results and
+  `trained.selection` names the data the choice was made on. On the provisional data the forest fails (one
+  far-out feature scores below its training quantile: each shallow tree splits on few of the 11 features) and
+  Mahalanobis passes. That is a simulator/phone result, not a decision: the check is re-run on the real L86
+  recording, and only then is the model "chosen on real L86 data".
 
 ```bash
 # 60 min clean L86 recording: train on the first 40 min, judge the last 20
@@ -512,6 +515,30 @@ python3 record_nmea.py --out real_l86_clean.nmea --duration-min 30    # in tmux;
 ```
 Lines carry a host-time prefix (`2026-10-23T08:15:02.123Z,$GPRMC,...`), so replay can check GNSS time
 against the host clock. Live mode writes the same format to `session/<name>/raw/`.
+
+**Without the Pi: the L86 on a Windows laptop through an Arduino Uno used as a USB-serial bridge.** Tie the
+Uno's RESET to GND (the ATmega328P stays in reset, its pins float), L86 TX → Uno pin 1 (the USB chip's
+receive line), L86 RX not connected, common GND, L86 on 3.3 V (the Uno 3.3 V pin gives 50 mA; the L86 TX high
+level is above the USB chip's 1.9 V input threshold). Nothing can be sent to the
+L86, so it stays at its defaults: 9600 baud, 1 Hz, GPS + GLONASS (fixes on the `GN` talker); all tools take
+that as is. Find the port in Device Manager (Ports: "Arduino Uno (COMn)"), close the Arduino IDE serial
+monitor, then from the repo (with the venv):
+```powershell
+.venv\Scripts\python toolsecord_nmea.py --port COM5 --baud 9600 --duration-min 60 --out testsixtureseal_l86_clean.nmea
+```
+Antenna with open sky, rig still, 60 min; the status line every 10 s must show `RMC A` and C/N0. Then:
+```powershell
+# almanac within 14 days of the recording (download while online, README "GPS almanac")
+.venv\Scripts\python -m gnss_guardian.cli sky-report testsixtureseal_l86_clean.nmea --almanac datalmanac.yuma
+#   -> GPS az/el in GSV yes/no, sky error median/max, below-horizon satellites, SUSPECT/ALARM (false alarms) per detector
+.venv\Scripts\python -m gnss_guardian.cli ai-train testsixtureseal_l86_clean.nmea --first-min 40 --label "real L86, first 40 min of 60" --out modelsi_model.json
+#   -> outlier check on both models, which one runs, "model chosen on: real L86, ..."
+.venv\Scripts\python -m gnss_guardian.cli ai-eval testsixtureseal_l86_clean.nmea --skip-min 40
+#   -> last 20 min: AI SUSPECT epochs and episodes per hour (the AI false alarms), spoofing ALARM epochs with/without AI
+.venv\Scripts\python -m gnss_guardian.cli replay testsixtureseal_l86_clean.nmea --out session\l86_clean
+#   -> full rule-engine run: alarm epochs in the summary, dashboard file for the session
+```
+(Tested on a simulator file in exactly that default format: `tests/test_bridge_recording.py`.)
 
 `tools/record_session.py` records the Pi camera and the L86 together on one clock (standalone:
 `python3-picamera2`, `python3-opencv`, `python3-serial`). It writes `video.avi`, `frames.csv` and

@@ -2,6 +2,7 @@
 """Record raw L86 NMEA with a host-time prefix, for replay and test fixtures. Standalone: pyserial only.
 
     python3 record_nmea.py --out clean.nmea [--port /dev/serial0] [--baud 9600] [--duration-min 30]
+    python record_nmea.py --out clean.nmea --port COM5     (Windows: L86 through an Uno USB-serial bridge)
 
 Each line is written as ``2026-10-23T08:15:02.123Z,$GPRMC,...*hh`` (host UTC receive time, the
 IonWatch RawNmeaLog format), so gnss-guardian replay can compare GNSS time with the host clock.
