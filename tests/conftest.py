@@ -30,7 +30,11 @@ fake_l86 = _load_tool("fake_l86")
 
 @pytest.fixture(scope="session")
 def cfg():
-    return load_config()
+    """Default config with the sky check off: the simulator's fixture sky is synthetic (not a real
+    constellation), so tests that want the check pass an almanac and --sky explicitly (test_sky.py)."""
+    c = load_config()
+    c["detect"]["sky"]["almanac_file"] = None
+    return c
 
 
 @pytest.fixture

@@ -5,8 +5,9 @@ and obeys the PMTK commands gnss-guardian sends (baud, output rate, sentences, c
                              [--speed 1] [--start 2026-10-22T14:00:00Z] [--duration-s 600]
                              [--walk loop:W:H:MPS | outback:DIST:HEADING:MPS [--still-s S]]
                              [--jam ramp|sudden --jam-at T [--jam-rate-db-s 4] [--jam-depth-db 25]]
-                             [--spoof jump|drift|time --spoof-at T [--jump-m 500] [--drift-mps 1.0] [--drift-quiet]
-                              [--time-offset-s 30] [--spoof-cn0 uniform|natural]]
+                             [--spoof jump|drift|time|sky --spoof-at T [--jump-m 500] [--drift-mps 1.0] [--drift-quiet]
+                              [--time-offset-s 30] [--spoof-cn0 uniform|natural] [--sky-rot-deg 30] [--sky-ghosts 2]]
+                             [--sky almanac:FILE]
                              [--recover-after DUR]
                              [--write FILE [--write-rate HZ]]
                              [--inject-fade PRN:START:DUR:DEPTH] [--inject-dropout START:DUR] [--pos-noise-m SIGMA]
@@ -34,6 +35,13 @@ Profiles:
   --spoof drift    reported position drags off at --drift-mps (bearing 60 deg), speed/course follow
                    (--drift-quiet: speed/course do not follow, like an indoor receiver wandering at "0 m/s")
   --spoof time     reported GNSS time runs --time-offset-s ahead
+  --spoof sky      a wrong sky at natural C/N0 (needs --sky): GPS azimuths rotated by --sky-rot-deg and
+                   --sky-ghosts PRNs that are below the horizon reported at 25-55 deg, plus a natural drift
+                   at --drift-mps (bearing 60 deg; speed/course follow). Invisible to the GNSS-only
+                   indicators except the sky check; the camera sees the drift
+  --sky almanac:FILE  GPS satellites (GP) from a YUMA almanac at the simulated time and the fixture
+                   position (C/N0 from elevation), instead of the fixture's fixed synthetic GPS sky;
+                   GLONASS/Galileo stay synthetic. Needed whenever the sky check is on
   every spoof      with --spoof-cn0 uniform (default) the receiver tracks the spoofer's sky: half of
                    each constellation's satellites swapped for PRNs not in view, all at 48 +/- 0.5 dB-Hz;
                    natural keeps the real satellites and C/N0 (kinematic/time signature only)
@@ -182,6 +190,40 @@ class Scenario:
         self.has_fix = True
         self.nrng = random.Random(a.seed + 7)
         self.noise, self._noise_s = (0.0, 0.0), None
+        self.alm = None
+        if getattr(a, "sky", None):
+            from gnss_guardian.detect import sky as skymod      # the detector's own almanac model
+            kind, _, path = a.sky.partition(":")
+            if kind != "almanac" or not path:
+                raise SystemExit("--sky almanac:FILE")
+            self.skymod, self.alm = skymod, skymod.parse_yuma(path)
+            self.srng = random.Random(a.seed + 11)
+        if a.spoof == "sky" and self.alm is None:
+            raise SystemExit("--spoof sky needs --sky almanac:FILE (the true sky it falsifies)")
+
+    def _almanac_gps(self, s: float, spoof: bool) -> tuple[list, list]:
+        """GPS (prn, el, az, snr) above 5 deg from the almanac at true time s, and the PRNs used in the
+        fix (el >= 10, at most 12). C/N0 follows elevation (30-47 dB-Hz) with a fixed per-PRN offset
+        and 0.7 dB noise. With --spoof sky active: azimuths rotated, ghost PRNs added (natural C/N0)."""
+        a = self.a
+        t = self.start + timedelta(seconds=s)
+        pred = self.skymod.predict(self.alm, t, self.lat0, self.lon0, self.alt0, leap_s=18)
+        sats = []
+        for prn, (el, az) in sorted(pred.items()):
+            if el < 5:
+                continue
+            snr = 30 + 17 * math.sin(math.radians(el)) + ((prn * 7) % 5 - 2) + self.srng.gauss(0, 0.7)
+            if spoof:
+                az = (az + a.sky_rot_deg) % 360
+            sats.append((prn, int(round(el)), int(round(az)) % 360, int(round(snr))))
+        if spoof:
+            below = [p for p, (el, _) in sorted(pred.items()) if el < -10][: a.sky_ghosts]
+            for i, prn in enumerate(below):
+                el = 25 + 15 * (i % 3)
+                snr = 30 + 17 * math.sin(math.radians(el)) + ((prn * 7) % 5 - 2) + self.srng.gauss(0, 0.7)
+                sats.append((prn, el, int(90 * i + 45) % 360, int(round(snr))))
+        used = [p for p, el, _, _ in sorted(sats, key=lambda x: -x[1]) if el >= 10][:12]
+        return sats, used
 
     def _end(self, at):
         return at + self.a.recover_after if (at is not None and self.a.recover_after is not None) else None
@@ -214,7 +256,7 @@ class Scenario:
         if spoof and a.spoof == "jump":
             e += a.jump_m * math.sin(math.radians(45))
             n += a.jump_m * math.cos(math.radians(45))
-        elif spoof and a.spoof == "drift":
+        elif spoof and a.spoof in ("drift", "sky"):
             dd = a.drift_mps * (s - a.spoof_at)
             e += dd * math.sin(math.radians(60))
             n += dd * math.cos(math.radians(60))
@@ -231,18 +273,22 @@ class Scenario:
             self.noise = tuple(phi * x + q * self.nrng.gauss(0, 1) for x in self.noise)
             e, n = e + self.noise[0], n + self.noise[1]
         depth = self.jam_depth(s)
+        uniform = spoof and a.spoof_cn0 == "uniform" and a.spoof != "sky"
+        if self.alm is not None:                         # the real GPS sky instead of the fixture's
+            gp, gp_used = self._almanac_gps(s, spoof and a.spoof == "sky")
+            c = {**c, "sats": {**c["sats"], "GP": gp}, "used": {**c["used"], "GP": gp_used}}
         talkers = [tk for tk in ("GP", "GL", "GA") if tk in c["sats"] and (tk != "GA" or galileo)]
         sky: dict[str, list] = {}
         for tk in talkers:
             sats = []
             src = c["sats"][tk]
-            if spoof and a.spoof_cn0 == "uniform":
+            if uniform:
                 keep = src[: (len(src) + 1) // 2]
                 extra = [(p, 20 + 9 * i % 60, (37 * p) % 360, None) for i, p in enumerate(NEW_PRNS[tk])]
                 src = keep + extra[: len(src) - len(keep)]
             for prn, el, az, snr in src:
                 key = (tk, prn)
-                if spoof and a.spoof_cn0 == "uniform":
+                if uniform:
                     cn0 = round(self.rng.gauss(SPOOF_CN0, SPOOF_CN0_SD))
                 elif snr is None:
                     cn0 = None
@@ -265,7 +311,7 @@ class Scenario:
             self.has_fix = self.has_fix or (s - self.fix_ok_since >= FIX_REACQ_S)
         else:
             self.fix_ok_since, self.has_fix = None, False
-        if spoof and a.spoof_cn0 == "uniform":
+        if uniform:
             used = {tk: [p for p, *_ in sky[tk] if (tk, p) in strong] for tk in talkers}
         else:
             used = {tk: [p for p in c["used"].get(tk, []) if (tk, p) in strong] for tk in talkers}
@@ -505,7 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--jam-at", type=float, default=120.0)
     ap.add_argument("--jam-rate-db-s", type=float, default=4.0)
     ap.add_argument("--jam-depth-db", type=float, default=25.0)
-    ap.add_argument("--spoof", choices=["jump", "drift", "time"], default=None)
+    ap.add_argument("--spoof", choices=["jump", "drift", "time", "sky"], default=None)
     ap.add_argument("--spoof-at", type=float, default=120.0)
     ap.add_argument("--jump-m", type=float, default=500.0)
     ap.add_argument("--drift-mps", type=float, default=1.0)
@@ -513,6 +559,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--pos-noise-m", type=float, default=0.0, help="position wander sigma (Gauss-Markov, 30 s)")
     ap.add_argument("--time-offset-s", type=float, default=30.0)
     ap.add_argument("--spoof-cn0", choices=["uniform", "natural"], default="uniform")
+    ap.add_argument("--sky", default=None, help="almanac:FILE: real GPS sky from a YUMA almanac (see header)")
+    ap.add_argument("--sky-rot-deg", type=float, default=30.0, help="--spoof sky: GPS azimuths rotated this much")
+    ap.add_argument("--sky-ghosts", type=int, default=2, help="--spoof sky: below-horizon PRNs reported as visible")
     ap.add_argument("--recover-after", type=float, default=None, help="the jam/spoof ends DUR s after it began")
     ap.add_argument("--galileo", action="store_true", help="start with Galileo on (as if PMTK353 had been sent)")
     ap.add_argument("--write", default=None, help="render the whole run into this file (host-prefixed) and exit")

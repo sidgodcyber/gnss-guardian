@@ -30,7 +30,7 @@ FORMAT = "gnss-guardian-dashboard/2"
 STATE_SOURCE = "pipeline state machine (gnss_guardian/state.py), read from epochs.jsonl"
 FEATURES = ("drop_frac", "mean_drop_db", "lost_frac", "hdop_ratio", "fix_lost", "implied_speed_mps", "sog_mps",
             "time_jump_s", "alt_rate_mps", "cn0_std", "newcomer_frac", "vision_diff_mps", "vision_drift_mps",
-            "vision_pos_drift_m")
+            "vision_pos_drift_m", "sky_err_deg", "sky_impossible")
 VISION = ("mode", "e", "n", "heading", "aligned", "quality", "n_inliers", "flag", "v_e", "v_n", "keyframes",
           "home_dist_m")
 
@@ -64,6 +64,10 @@ def indicator_config(cfg: dict) -> dict:
                 "vision_diff_mps", s["vision_diff_mps"], "m/s", s["weights"]),
             ind("vision_pos", f"GNSS vs camera displacement ({s['vision_pos_window_s']} s)", "vision_pos_drift_m",
                 s["vision_pos_drift_m"], "m", s["weights"]),
+            ind("sky_geom", "satellite directions vs almanac sky", "sky_err_deg", s["sky_err_deg"], "deg",
+                s["weights"]),
+            ind("sky_impossible", "tracked satellites below the horizon", "sky_impossible", s["sky_impossible_n"],
+                "satellites", s["weights"]),
         ]},
         "hysteresis": {k: h[k] for k in ("suspect_on", "suspect_off", "suspect_hold_s", "alarm_on", "alarm_k",
                                          "alarm_immediate", "alarm_off", "alarm_hold_s", "min_alarm_s")},

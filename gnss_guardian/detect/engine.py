@@ -29,7 +29,8 @@ FEATURE_KEYS = ("n_visible", "n_tracked", "n_used", "cn0_mean", "cn0_std", "n_ju
                 "drop_frac", "lost_frac", "mean_drop_db", "hdop", "hdop_base", "hdop_ratio", "fix_lost",
                 "n_newcomers", "newcomer_frac", "jump_m", "implied_speed_mps", "sog_mps", "alt_rate_mps",
                 "time_offset_s", "time_jump_s", "vision_diff_mps", "vision_drift_mps", "vision_pos_drift_m",
-                "vision_pos_aligned", "fix_gap_s", "after_degraded")
+                "vision_pos_aligned", "fix_gap_s", "after_degraded", "sky_err_deg", "sky_n", "sky_impossible",
+                "sky_impossible_prns")
 
 
 def _r(x, nd=3):

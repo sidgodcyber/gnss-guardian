@@ -130,6 +130,16 @@ detect:
     time_offset_samples: 30      # GNSS-minus-monotonic offset baseline (median of the last N clean epochs)
   elev_mask_deg: 5               # C/N0 mean/std use satellites at or above this elevation
 
+  sky:                           # sky-geometry check (detect/sky.py): GPS az/el in GSV vs a YUMA almanac
+    enabled: true                # off anyway (event sky_check, with the reason) when the file is missing,
+    almanac_file: data/almanac.yuma   # unreadable or older than max_age_days; relative to the repo root.
+                                 #   Fetch: https://navcen.uscg.gov/sites/default/files/gps/almanac/current_yuma.alm
+    max_age_days: 14             # almanac reference time vs the data's GNSS time (an offline Pi has no RTC)
+    leap_s: 18                   # GPS - UTC seconds
+    mask_deg: 5                  # compare directions of satellites the receiver lists at or above this
+    min_sats: 4                  # fewer GPS satellites to compare: no sky features this epoch
+    below_deg: -5                # a tracked satellite predicted below this elevation is impossible here, now
+
   jamming:                       # "GNSS denied: jamming or blockage" (no AGC on the L86: RF jamming,
                                  #  foil, buildings and canopy look the same)
     drop_db: 6                   # a satellite has "dropped" when C/N0 <= baseline - drop_db (or is lost)
@@ -167,8 +177,13 @@ detect:
                                  # vision thresholds: set from synthetic walks only so far
     vision_min_quality: 0.5
     vision_max_age_s: 1.5
+    sky_err_deg: [3, 10]         # ramp on the median angle between reported (GSV) and predicted GPS directions
+                                 #   (real phone sky vs the YUMA almanac: median 0.4-0.65 deg, max 1.5 deg)
+    sky_impossible_n: [0, 2]     # ramp on the number of tracked GPS satellites predicted below the horizon
+                                 #   (below detect.sky.below_deg): 1 -> SUSPECT, 2 -> ALARM. A count, not a
+                                 #   fraction: one satellite tracked from under the ground is impossible
     weights: {speed: 0.95, time: 0.95, altitude: 0.7, uniform_cn0: 0.55, newcomers: 0.5, vision: 0.8,
-              vision_pos: 0.8}
+              vision_pos: 0.8, sky_geom: 0.8, sky_impossible: 0.9}
     gate_kinematic_when_jammed: true   # a degraded fix under jamming jumps around: not attributed to spoofing
     degraded_recent_s: 10        # a jump within this long of a jamming alarm/suspect or a fix gap still alarms
                                  #   (jam-then-spoof is a real attack) with the reason "jump after degraded fix"

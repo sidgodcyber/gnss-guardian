@@ -13,6 +13,8 @@ Indicators (combined with a noisy-OR, so one strong indicator alone raises the a
   vision_pos   GNSS displacement disagrees with camera displacement over 30 s (a slow drift with a
                still camera; also before the camera heading is aligned, and when the receiver
                reports speed 0 while its position wanders)
+  sky_geom     reported GPS satellite directions (GSV az/el) differ from the almanac sky (detect/sky.py)
+  sky_impossible  tracked GPS satellites that should be below the horizon here and now
 
 A position jump within degraded_recent_s of jamming or a fix gap still alarms (a jam followed by
 a spoof is a real attack); the reason then says "jump after degraded fix".
@@ -53,7 +55,9 @@ class SpoofingDetector:
         s.parts = {"speed": ramp(speed / self.vmax, c["speed_ramp_x"]),
                    "time": ramp(f["time_jump_s"], c["time_jump_s"]),
                    "altitude": ramp(f["alt_rate_mps"], c["alt_rate_mps"]),
-                   "uniform_cn0": uniform, "newcomers": newcomers, "vision": vision, "vision_pos": vision_pos}
+                   "uniform_cn0": uniform, "newcomers": newcomers, "vision": vision, "vision_pos": vision_pos,
+                   "sky_geom": ramp(f.get("sky_err_deg"), c["sky_err_deg"]),
+                   "sky_impossible": ramp(f.get("sky_impossible"), c["sky_impossible_n"])}
         if jammed and c["gate_kinematic_when_jammed"]:
             for k in KINEMATIC:
                 if s.parts[k] > 0:
@@ -86,6 +90,12 @@ class SpoofingDetector:
             else:
                 s.reasons.append(f"GNSS track drifting from the vision track: {f['vision_drift_mps']:.2f} m/s "
                                  f"over {c['vision_long_window_s']} s")
+        if p["sky_geom"] > 0:
+            s.reasons.append(f"satellite directions {f['sky_err_deg']:.1f} deg off the almanac sky "
+                             f"(median over {f['sky_n']} GPS satellites)")
+        if p["sky_impossible"] > 0:
+            s.reasons.append(f"{len(f['sky_impossible_prns'])}/{f['sky_n_tracked']} tracked GPS satellites should be "
+                             f"below the horizon here and now: {', '.join(f['sky_impossible_prns'])}")
         if p["vision_pos"] > 0:
             how = "" if f["vision_pos_aligned"] else " (lengths only: camera heading not aligned yet)"
             s.reasons.append(f"GNSS moved {f['vision_pos_gnss_m']:.1f} m, camera {f['vision_pos_cam_m']:.1f} m over "

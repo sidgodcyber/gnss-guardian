@@ -52,6 +52,18 @@ class Pipeline:
         self._home_wait: str | None = None
         if self.home.home is not None:
             writer.set_home(self.home.home)
+        self._sky_status = None
+        self._sky_event()
+
+    def _sky_event(self, t_gnss=None) -> None:
+        """sky_check event at start and whenever the check turns on/off (e.g. almanac too old for the data)."""
+        st = self.engine.features.sky.status
+        key = (st["enabled"], st["reason"])
+        if key != self._sky_status:
+            self._sky_status = key
+            self.writer.event("sky_check", t_gnss=t_gnss, enabled=st["enabled"], detail=st["reason"],
+                              age_days=st.get("age_days"))
+            self.echo(f"{t_gnss or '-'}  sky check {'ON' if st['enabled'] else 'OFF'}: {st['reason']}")
 
     def feed(self, line: str, host=None, mono=None) -> list[dict]:
         return [self._handle(ep) for ep in self.builder.feed(line, host, mono)]
@@ -70,6 +82,7 @@ class Pipeline:
             if vel is not None:
                 self.engine.observe_vision(*vel)
         v = self.engine.update(ep)
+        self._sky_event(v["t_gnss"])
         if self.state.gnss_blocked and v["gnss_trusted"]:
             v["gnss_trusted"] = False                # spoof latch held until GNSS and the camera agree
             v["trust_blocked"] = "spoof latch: waiting for GNSS and camera to agree"

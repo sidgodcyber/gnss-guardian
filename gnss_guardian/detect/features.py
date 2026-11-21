@@ -12,6 +12,8 @@ import statistics
 from collections import deque
 
 from gnss_guardian import geo
+from gnss_guardian.config import ROOT
+from gnss_guardian.detect.sky import SkyCheck
 from gnss_guardian.io.epochs import Epoch
 
 
@@ -105,6 +107,8 @@ class FeatureExtractor:
         self._gvel: deque = deque(maxlen=10)         # (t, v_east, v_north) of recent valid fixes
         self.baseline = Baseline(cfg)
         self._prev_fix: tuple[float, float, float, float | None] | None = None   # t, lat, lon, alt
+        self.sky = SkyCheck(cfg, root=ROOT)
+        self._sky_ref: tuple[float, float, float] | None = None   # last clean fix: where the sky is predicted
 
     def compute(self, ep: Epoch, vision: tuple | None = None, track=None) -> dict:
         t = epoch_time(ep)
@@ -185,7 +189,16 @@ class FeatureExtractor:
         else:
             self._vdiff.clear()                      # a gap in the comparison restarts both windows
         self._displacement(ep, t, f, track)
+        f.update(self.sky.features(ep.sats, self._sky_time(ep), self._sky_ref))
         return f
+
+    def _sky_time(self, ep: Epoch) -> float | None:
+        """UTC (POSIX s) for the sky prediction: host clock + baseline GNSS-minus-host offset, so a GNSS
+        time spoof does not move the predicted sky; the reported GNSS time when there is no host clock."""
+        off = self.baseline.median("offset")
+        if ep.mono is not None and off is not None:
+            return ep.mono + off
+        return ep.t_gnss.timestamp() if ep.t_gnss is not None else None
 
     def _displacement(self, ep: Epoch, t: float, f: dict, track) -> None:
         """GNSS displacement against camera displacement over vision_pos_window_s: the means of the
@@ -242,5 +255,7 @@ class FeatureExtractor:
         """After the verdict: grow the baseline with clean epochs, remember the fix."""
         if clean:
             self.baseline.add(ep, feats["t"], feats["time_offset_s"])
+            if ep.fix_valid:
+                self._sky_ref = (ep.lat, ep.lon, ep.alt_m or 0.0)
         if ep.fix_valid:
             self._prev_fix = (feats["t"], ep.lat, ep.lon, ep.alt_m)

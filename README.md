@@ -60,7 +60,7 @@ demo_spoof: WARMING_UP -> GNSS_OK -> SPOOFED -> VISION_NAV -> RETURN_HOME -> HOM
 
 Live demo through the serial path (the simulator serves `socket://`, the Windows stand-in for `/dev/serial0`):
 ```powershell
-.venv\Scripts\python tools\fake_l86.py --transport tcp --walk loop:20:10:1.2 --still-s 100 --spoof jump --spoof-at 120   # prints PORT socket://127.0.0.1:NNNN
+.venv\Scripts\python tools\fake_l86.py --transport tcp --walk loop:20:10:1.2 --still-s 100 --spoof jump --spoof-at 120 --sky almanac:data/almanac.yuma   # prints PORT socket://127.0.0.1:NNNN
 .venv\Scripts\python -m gnss_guardian.cli live --l86 socket://127.0.0.1:NNNN --out session\live --overlay 8080 --demo-inject
 .venv\Scripts\python -m gnss_guardian.cli status --data session\live
 ```
@@ -109,6 +109,11 @@ SUSPECT and "GNSS SPOOFING ALARM" at ALARM):
 - GNSS displacement disagreeing with camera displacement over 30 s (`vision_pos`, 3–6 m ramp). It works
   before the camera heading is aligned (it then compares lengths only) and when the receiver reports
   speed 0 while its position wanders: 0.2 m/s of drift under a still camera is 6 m in 30 s
+- **sky geometry** ([detect/sky.py](gnss_guardian/detect/sky.py)): the GPS satellite directions in GSV against
+  the sky predicted from a YUMA almanac on disk, at the last clean fix and on the host clock (so neither a
+  position nor a time spoof moves the prediction). Median angle 3 → 10° ramps `sky_geom`; each tracked GPS
+  satellite that should be below the horizon (< −5°) counts toward `sky_impossible` (1 → SUSPECT, 2 → ALARM).
+  Off, with a `sky_check` event saying why, when the file is missing or more than 14 days from the data
 
 Kinematic indicators are not blamed on spoofing while the fix is degraded by jamming. A jump within 10 s
 of jamming or a fix gap still alarms (jam-then-spoof is a real attack), with the reason
@@ -136,12 +141,20 @@ not as jamming. All thresholds are in [config/default.yaml](config/default.yaml)
 | `--spoof drift` (1 m/s, spoofer's uniform sky) | spoofing | 1 s |
 | `--spoof time` (+30 s) | spoofing | 0 s |
 | `--spoof drift --spoof-cn0 natural` | none from GNSS alone; spoofing via the camera | 2.0 m/s: 2 s, 1.0 m/s: 3 s, 0.5 m/s: 9 s (rendered video) |
+| `--spoof sky` (`--sky` almanac; azimuths +30°, 2 below-horizon PRNs, natural C/N0, 1 m/s natural drift) | sky check off: none from GNSS alone (a simulated camera velocity feed catches the drift, test bound ≤ 5 s); sky check on: spoofing, no camera | 0 s |
+| `--spoof sky`, azimuth rotation only | sky check | 5°: not detected (median 4.0°); 8°: SUSPECT only; 10°: 1 s; 15°: 0 s |
+| `--spoof sky`, below-horizon PRNs only | sky check | 1 PRN: SUSPECT only; 2 PRNs: 0 s |
+
+Sky model check: the almanac prediction against the real GSV of the phone proxies (integer degrees): median
+0.64° / max 1.44° (18 Oct, almanac of 18 Oct), median 0.39° / max 0.77° (20 Oct, almanac of 20 Oct).
 
 False alarms (ALARM epochs):
 
 | Data | ALARM | Notes |
 |---|---|---|
 | Simulator walk, 30 min | 0 | also 0 SUSPECT; synthetic C/N0 |
+| Simulator walk, 30 min, real almanac sky (`--sky`), sky check on | 0 | also 0 SUSPECT; sky error max 0.48° |
+| Phone proxies 18 / 20 Oct, sky check on (almanac of that week) | 0 | 0 spoofing SUSPECT; sky error max 1.17° / 0.55°, no impossible satellites |
 | Phone proxy 18 Oct (5 min) | 0 | 4 SUSPECT during a real satellite/fix dropout in the log |
 | Phone proxy 21 Oct (5 min) | 0 | 0 SUSPECT |
 | Real L86 clean (30 min) | pending | test skips until `tests/fixtures/real_l86_clean.nmea` exists |
@@ -298,6 +311,14 @@ Also measured on the bench: vision 15.7 fps at scale 1.0 and 30.0 fps at 0.5 (ca
   realistic C/N0, is invisible to GNSS-only checks. Only the camera cross-check (Phase 2) catches it. A
   spoofer that reproduces the visible PRNs at realistic, varied power would also defeat the
   uniformity and newcomer indicators.
+- **Sky check:** GPS only (GP talker, PRN 1–32); GLONASS/Galileo are not checked. It catches a sky from another
+  time or place (replay, meaconing with a delay, a remote-location spoof), a stale or invented constellation and
+  hand-made NMEA. A spoofer that synthesises its signals from the current broadcast ephemeris produces a
+  consistent sky, and a local drag-off does not change the sky: neither is caught by this check. Thresholds are
+  set against phone GSV (integer degrees); whether the L86 reports az/el as cleanly (e.g. right after a cold
+  start, before its almanac is complete) is **not yet verified**. A PRN reassigned to a new satellite after the
+  almanac was downloaded would look impossible: keep the almanac within 14 days. Without `--sky`, the
+  simulator's fixture sky is synthetic and the check (correctly) flags it.
 - **Tuning so far:** thresholds are tuned on the simulator and on phone-derived proxies. Those have real
   C/N0 dynamics but come from a phone, not the L86. Real L86 recordings are being made; until those tests
   run, false-alarm rates on the L86 itself are unmeasured. The vision thresholds are set from synthetic
@@ -336,7 +357,11 @@ TXD).
    `python3 -m venv --system-site-packages .venv` (so Picamera2 is visible) and `pip install -e .`.
 4. **Frame rate.** Measured on the bench: 15.7 fps at scale 1.0, 30.0 fps (camera-capped) at 0.5, the
    default. Still to measure: `gnss-guardian vision-bench --scale 0.5 --overlay` (cost of the overlay).
-5. **Power.** 5 V 3 A USB-C; `vcgencmd get_throttled` must read `0x0` with the camera and L86 running.
+5. **GPS almanac (sky check).** While online, at most 14 days before the run:
+   `mkdir -p data && curl -L -o data/almanac.yuma https://navcen.uscg.gov/sites/default/files/gps/almanac/current_yuma.alm`.
+   Past days: `https://navcen.uscg.gov/sites/default/files/gps/almanac/YYYY/Yuma/DDD.alm` (DDD = day of year).
+   Without it the run logs `sky_check` OFF and carries on.
+6. **Power.** 5 V 3 A USB-C; `vcgencmd get_throttled` must read `0x0` with the camera and L86 running.
 
 ## Field demo (road)
 
@@ -415,6 +440,7 @@ gnss_guardian/
                            camera thread, display server, demo injection
   detect/features.py       per-epoch features, clean-only rolling baseline
   detect/jamming.py        denial score      detect/spoofing.py  spoofing score
+  detect/sky.py            YUMA almanac, GPS az/el prediction (IS-GPS-200), sky-geometry features
   detect/hysteresis.py     CLEAR/SUSPECT/ALARM levels
   detect/engine.py         Epoch -> Verdict (JSON-safe)
   vision/camera.py         Picamera2 (import-guarded) / USB / video file sources, one clock with GNSS
