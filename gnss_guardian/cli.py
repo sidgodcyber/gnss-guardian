@@ -10,6 +10,7 @@
     python -m gnss_guardian.cli calibrate --video walk/video.avi --distance 10 [--height 1.0] [--dry-run]
     python -m gnss_guardian.cli calibrate --live --distance 5 [--camera picam]     (on the Pi, on the road)
     python -m gnss_guardian.cli field-demo --out session/NAME [--l86 /dev/serial0] [--port 8080]
+    python -m gnss_guardian.cli outputs-test [--safe-action] [--uno /dev/ttyACM0]     (LED / Uno wiring check)
     python -m gnss_guardian.cli vision-bench [--video FILE] [--frames 300] [--scale 0.5] [--threads N]
 """
 from __future__ import annotations
@@ -66,8 +67,10 @@ def cli():
 @click.option("--demo-inject", is_flag=True,
               help="Demo only: inject a software spoof (jump / drift) into the NMEA before the detector, from "
                    "buttons on the guidance page. Needs --overlay.")
+@click.option("--safe-action", is_flag=True,
+              help="Demo only: drive the safe-action output (Uno relay + servo flag for a ground stand-in).")
 def live(port, baud, rate, l86_constellations, out, home, config_path, clock_scale, duration_s, camera, no_camera,
-         overlay_port, overlay_record, demo_inject):
+         overlay_port, overlay_record, demo_inject, safe_action):
     """Read the L86 (and the camera) live: detection every fix, vision navigation every frame."""
     from gnss_guardian.io.serial_live import run_live
     if demo_inject and overlay_port is None:
@@ -77,7 +80,8 @@ def live(port, baud, rate, l86_constellations, out, home, config_path, clock_sca
     s = run_live(port, baud, out, cfg, rate=rate, constellations=names, clock_scale=clock_scale,
                  duration_s=duration_s, home=_home(home),
                  camera=None if no_camera else (camera or cfg["camera"]["source"]),
-                 overlay_port=overlay_port, overlay_record=overlay_record, demo_inject=demo_inject, echo=click.echo)
+                 overlay_port=overlay_port, overlay_record=overlay_record, demo_inject=demo_inject,
+                 safe_action=safe_action or None, echo=click.echo)
     click.echo(f"epochs {s['epochs']}, first alarms {s['first_alarm'] or '-'}")
     click.echo(f"states: {' -> '.join(s['states']) or '-'}")
 
@@ -241,7 +245,8 @@ def _calibrate_live(cfg, spec, distance, height):
 @click.option("--record/--no-record", default=True, show_default=True, help="Save overlay.mp4 in the session folder.")
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--duration-s", default=None, type=float, help="Stop after this many seconds (default: Ctrl-C).")
-def field_demo(out, port, http_port, camera, record, config_path, duration_s):
+@click.option("--safe-action", is_flag=True, help="Also drive the Uno safe-action output (ground stand-in, demo only).")
+def field_demo(out, port, http_port, camera, record, config_path, duration_s, safe_action):
     """The road demo in one command: live with camera, overlay, guidance page and demo injection."""
     from gnss_guardian.io.serial_live import run_live
     cfg = load_config(config_path)
@@ -249,9 +254,49 @@ def field_demo(out, port, http_port, camera, record, config_path, duration_s):
                "shows home set and the home keyframe stored (warm-up 60 s + home 30 s).")
     click.echo("Injected spoofs are DEMO ONLY (software, before the detector); raw/ keeps the real NMEA.")
     s = run_live(port, 9600, out, cfg, camera=camera or cfg["camera"]["source"], overlay_port=http_port,
-                 overlay_record=record, demo_inject=True, duration_s=duration_s, echo=click.echo)
+                 overlay_record=record, demo_inject=True, duration_s=duration_s, safe_action=safe_action or None,
+                 echo=click.echo)
     click.echo(f"epochs {s['epochs']}, states: {' -> '.join(s['states']) or '-'}")
     click.echo(f"session: {out}  (gnss-guardian replay {out} --out {out}_replay  opens it in the dashboard)")
+
+
+@cli.command("outputs-test")
+@click.option("--each-s", default=3.0, show_default=True, type=float, help="Seconds per state.")
+@click.option("--safe-action", is_flag=True, help="Also drive the safe-action output (Uno or GPIO, per config).")
+@click.option("--uno", default=None, help="Uno port (default: config outputs.uno.port), e.g. /dev/ttyACM0.")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
+def outputs_test(each_s, safe_action, uno, config_path):
+    """Wiring check: step the LEDs (and the safe-action output) through every state, then stop to show
+    the Uno watchdog dropping to SAFE."""
+    import time
+    from collections import deque
+
+    from gnss_guardian.outputs import Outputs
+    cfg = load_config(config_path)
+    if uno:
+        cfg["outputs"]["uno"]["port"] = uno
+    ev = deque()
+    out = Outputs(cfg, events=ev, safe_action=safe_action)
+    seq = [("WARMING_UP", None), ("GNSS_OK", None), ("SUSPECT", None), ("JAMMED", "jamming"),
+           ("VISION_NAV", "jamming"), ("SPOOFED", "spoofing"), ("RETURN_HOME", "spoofing"),
+           ("HOME_REACHED", "spoofing"), ("GNSS_OK", None)]
+    try:
+        for state, cause in seq:
+            t_end = time.monotonic() + each_s
+            while time.monotonic() < t_end:
+                out.update({"state": state, "cause": cause})
+                while ev:
+                    click.echo(f"  event {ev.popleft()}")
+                time.sleep(0.2)
+            click.echo(f"{state:<13} cause {cause or '-':<9} safe mode {out.mode}")
+        click.echo(f"no updates now: STALE after {cfg['live']['no_data_s']} s; the Uno watchdog alone would go SAFE "
+                   f"{cfg['outputs']['uno']['watchdog_s']} s after the heartbeat stops")
+        time.sleep(cfg["live"]["no_data_s"] + 1.5)
+        click.echo(f"STALE         safe mode {out.mode}")
+    finally:
+        out.close()
+        while ev:
+            click.echo(f"  event {ev.popleft()}")
 
 
 @cli.command("vision-bench")

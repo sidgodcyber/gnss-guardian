@@ -270,9 +270,11 @@ def start_display(cfg: dict, hub: LiveHub, nav, writer, out_dir: Path, port: int
 def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellations: list[str] | None = None,
              clock_scale: float = 1.0, duration_s: float | None = None, home=None, echo=print,
              camera: str | None = None, overlay_port: int | None = None, overlay_record: bool = False,
-             demo_inject: bool = False) -> dict:
+             demo_inject: bool = False, safe_action: bool | None = None, outputs=None) -> dict:
     """Read NMEA from ``port`` (/dev/serial0, COM3, or a pyserial URL such as socket://127.0.0.1:5000)
-    until stopped or ``duration_s`` wall seconds. Returns the pipeline summary."""
+    until stopped or ``duration_s`` wall seconds. Returns the pipeline summary. Status LEDs (and, with
+    ``safe_action``, the Uno safe-action output) follow the state through gnss_guardian.outputs;
+    ``outputs`` replaces them (tests)."""
     import serial
 
     from gnss_guardian.inject import DemoInjector
@@ -291,6 +293,12 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
     injector = DemoInjector(clock=lambda: time.monotonic() * clock_scale) if demo_inject else None
     det_raw = RawNmeaLog(out_dir / "detector_input") if injector else None
     pending_events: deque = deque()                 # from the display server's thread, logged by this one
+    out_events: deque = deque()                     # from the outputs thread (LEDs, Uno link)
+    if outputs is None:
+        from gnss_guardian.outputs import Outputs
+        outputs = Outputs(cfg, events=out_events, safe_action=safe_action)
+    else:
+        outputs.events = out_events
 
     def on_inject(kind, result):
         pending_events.append(("demo_inject", {"action": kind, "at_utc": utc_now(),
@@ -322,12 +330,16 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
             for kind, data in overlay.events:
                 writer.event(kind, **data)
             overlay.events.clear()
+        while out_events:
+            kind, data = out_events.popleft()
+            writer.event(kind, **data)
 
     def handle(verdicts):
         nonlocal last_epoch, no_data_flagged, galileo_t0, galileo_done, ser, pending
         drain_events()
         for v in verdicts:
             hub.update(v, nav.breadcrumbs() if nav else None)
+            outputs.update(v)                         # stores the state only; LEDs/Uno run in their own thread
             last_epoch = time.monotonic()
             if no_data_flagged:
                 writer.event("data_resumed", t_gnss=v["t_gnss"])
@@ -436,6 +448,7 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
         if ser is not None:
             ser.close()
         handle(pipe.flush())
+        outputs.close()                             # LEDs off, Uno told SAFE
         drain_events()
         writer.close()
         raw.close()

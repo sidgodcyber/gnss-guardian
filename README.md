@@ -314,7 +314,8 @@ Also measured on the bench: vision 15.7 fps at scale 1.0 and 30.0 fps at 0.5 (ca
 - **Sky check:** GPS only (GP talker, PRN 1–32); GLONASS/Galileo are not checked. It catches a sky from another
   time or place (replay, meaconing with a delay, a remote-location spoof), a stale or invented constellation and
   hand-made NMEA. A spoofer that synthesises its signals from the current broadcast ephemeris produces a
-  consistent sky, and a local drag-off does not change the sky: neither is caught by this check. Thresholds are
+  consistent sky, and a local drag-off does not change the sky: neither is caught by this check. That case is
+  covered by the camera cross-check (velocity and displacement against vision). Thresholds are
   set against phone GSV (integer degrees); whether the L86 reports az/el as cleanly (e.g. right after a cold
   start, before its almanac is complete) is **not yet verified**. A PRN reassigned to a new satellite after the
   almanac was downloaded would look impossible: keep the almanac within 14 days. Without `--sky`, the
@@ -362,6 +363,37 @@ TXD).
    Past days: `https://navcen.uscg.gov/sites/default/files/gps/almanac/YYYY/Yuma/DDD.alm` (DDD = day of year).
    Without it the run logs `sky_check` OFF and carries on.
 6. **Power.** 5 V 3 A USB-C; `vcgencmd get_throttled` must read `0x0` with the camera and L86 running.
+
+## Status LEDs and the safe-action output (Uno)
+
+Live mode drives four LEDs on the Pi ([gnss_guardian/outputs.py](gnss_guardian/outputs.py)); pins in `outputs.pins`
+(BCM). Each LED: GPIO → 330 Ω → LED anode, cathode → GND (header pin 14).
+
+| LED (BCM / header pin) | Meaning |
+|---|---|
+| green 17 / 11 | steady: GNSS_OK · slow blink: navigating on the camera (VISION_NAV, RETURN_HOME) · double blink: HOME_REACHED |
+| yellow 27 / 13 | steady: WARMING_UP or SUSPECT · fast blink: no epoch for 3 s (STALE) |
+| red 22 / 15 | steady: spoofing alarm (SPOOFED, and while navigating after it) |
+| blue 23 / 16 | blinking 2 Hz: jamming / blockage alarm (JAMMED, and while navigating after it) |
+
+The serial loop only stores the newest state; one worker thread (20 Hz) drives the patterns and the Uno, so
+a slow or broken output never delays detection (a failing backend is dropped with an `outputs_error` event).
+Without gpiozero (a laptop) the LEDs are a no-op (`outputs_leds` event). On the Pi:
+`sudo apt install -y python3-gpiozero python3-lgpio` (the venv already uses `--system-site-packages`).
+
+**Safe action (demo only, off by default).** A relay (stand-in motor) and a servo flag (OK 0° / HOLD 90° / SAFE
+180°) on an Arduino Uno at `/dev/ttyACM0` ([firmware/uno_safe_action](firmware/uno_safe_action/uno_safe_action.ino):
+relay D7, servo D9 with its own 5 V supply and a common ground). Enable with `--safe-action` on `live` or
+`field-demo`. It only mirrors the navigation state (`outputs.safe_modes`: GNSS_OK → OK; JAMMED, SPOOFED,
+STALE → SAFE; the rest → HOLD); **guidance stays advisory and the module never commands an aircraft.** The Pi
+sends a checksummed line on every change and every 1 s; the Uno starts in SAFE and returns to SAFE when no valid
+line has arrived for 3 s (a hung Pi, a crashed process, a pulled cable). Wiring check without the L86:
+`gnss-guardian outputs-test --safe-action` (steps through every state, then stops so the watchdog can be seen).
+`tools/fake_uno.py` runs the firmware's logic on the laptop (`--uno socket://127.0.0.1:NNNN`).
+
+Measured (laptop, `tools/fake_uno.py` over `socket://`; the real Uno is not yet measured): every state change
+reaches the Uno at once (same 50 ms worker tick; test); heartbeat stopped without a goodbye → SAFE after the 3 s
+watchdog (test bound 2–4.5 s).
 
 ## Field demo (road)
 
@@ -454,6 +486,9 @@ gnss_guardian/
   overlay.py               camera overlay frames (own thread), MJPEG source, overlay.mp4
   web/server.py            display server: overlay stream, /guide, /live.json, /inject/*   web/pages.py  guide page
   inject.py                demo spoof injection into the NMEA before the detector (field demo only)
+  outputs.py               status LEDs (gpiozero, import-guarded) and the Uno safe-action heartbeat (demo only)
+firmware/uno_safe_action/  Arduino Uno sketch: relay + servo flag, 3 s heartbeat watchdog -> SAFE
+tools/fake_uno.py          the Uno sketch's logic in Python (socket://) for tests and laptop demos
   run.py session.py home.py status.py cli.py
 tools/fake_l86.py          serial simulator with jam/spoof/walk profiles, --write for files
 tools/synth_walk.py        rendered downward-camera walks (video + frames.csv + truth + matching NMEA)
