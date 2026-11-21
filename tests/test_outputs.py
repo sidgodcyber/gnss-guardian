@@ -7,7 +7,9 @@ tools/fake_uno.py).
   import guard   no gpiozero (laptop): LEDs are a no-op, event says so
   Uno            line protocol with checksum; heartbeat carries the mode per state; the fake Uno (the
                  firmware's logic) boots SAFE, follows the heartbeat and drops to SAFE 3 s after it stops
-  live           run_live against the serial simulator drives the LEDs (green after warm-up, blue blinking
+  3 LEDs         the default build (green 17, yellow 27, red 22, blue null): jamming = red blinking 2 Hz,
+                 spoofing = red steady; the 4-LED mapping (jam_led blue) is still covered
+  live           run_live against the serial simulator drives the LEDs (green after warm-up, red blinking
                  in a jam)
 """
 import copy
@@ -50,20 +52,47 @@ def lit(out, clk, state, cause=None, at=0.0):
 
 @pytest.mark.parametrize("state,cause,on", [
     ("WARMING_UP", None, {"yellow"}), ("GNSS_OK", None, {"green"}), ("SUSPECT", None, {"yellow"}),
-    ("SPOOFED", "spoofing", {"red"}), ("JAMMED", "jamming", {"blue"}),
-    ("VISION_NAV", "spoofing", {"red", "green"}), ("RETURN_HOME", "jamming", {"blue", "green"}),
-    ("HOME_REACHED", "spoofing", {"red", "green"}),
+    ("SPOOFED", "spoofing", {"red"}), ("JAMMED", "jamming", {"red"}),
+    ("VISION_NAV", "spoofing", {"red", "green"}), ("VISION_NAV", "jamming", {"red", "green"}),
+    ("RETURN_HOME", "jamming", {"red", "green"}), ("HOME_REACHED", "spoofing", {"red", "green"}),
+    ("HOME_REACHED", "jamming", {"red", "green"}),
 ])
 def test_state_patterns_at_start(cfg, state, cause, on):
     out, clk = make(cfg)
     assert lit(out, clk, state, cause) == on
 
 
+def test_three_led_build_jam_vs_spoof(cfg):
+    """Red steady = spoofing, red blinking 2 Hz = jamming; green slow blink while on the camera; blue not used."""
+    assert cfg["outputs"]["pins"]["blue"] is None and cfg["outputs"]["jam_led"] == "red"
+    out, clk = make(cfg)
+    seq = [lit(out, clk, "SPOOFED", "spoofing", at=dt) for dt in (0, 0.3, 0.3)]
+    assert seq == [{"red"}] * 3                                              # steady
+    out, clk = make(cfg)
+    assert [lit(out, clk, "JAMMED", "jamming", at=dt) for dt in (0, 0.3, 0.3)] == [{"red"}, set(), {"red"}]
+    out, clk = make(cfg)
+    got = [lit(out, clk, "RETURN_HOME", "jamming", at=dt) for dt in (0, 0.3, 0.3, 0.6, 0.4)]
+    # t = 0, 0.3, 0.6, 1.2, 1.6 s: red 2 Hz (0.25 s on / off), green 0.5 Hz (1 s on / off), both from t = 0
+    assert got == [{"red", "green"}, {"green"}, {"red", "green"}, {"red"}, {"red"}], got
+    out, clk = make(cfg)
+    assert lit(out, clk, "RETURN_HOME", "spoofing") == {"red", "green"}
+    assert lit(out, clk, "RETURN_HOME", "spoofing", at=1.2) == {"red"}       # green off phase; spoof: red steady
+    assert not out.leds.level["blue"]
+
+
+def test_four_led_mapping(cfg):
+    c = copy.deepcopy(cfg)
+    c["outputs"].update(jam_led="blue", pins={"green": 17, "yellow": 27, "red": 22, "blue": 23})
+    out, clk = make(c)
+    assert lit(out, clk, "JAMMED", "jamming") == {"blue"}
+    assert lit(out, clk, "RETURN_HOME", "jamming") == {"blue", "green"}
+
+
 def test_blinking(cfg):
     out, clk = make(cfg)
-    assert lit(out, clk, "JAMMED", "jamming") == {"blue"}
+    assert lit(out, clk, "JAMMED", "jamming") == {"red"}
     assert lit(out, clk, "JAMMED", "jamming", at=0.3) == set()             # 2 Hz: off after 0.25 s
-    assert lit(out, clk, "JAMMED", "jamming", at=0.3) == {"blue"}
+    assert lit(out, clk, "JAMMED", "jamming", at=0.3) == {"red"}
     p = led_pattern("HOME_REACHED", "spoofing")["green"]
     assert [level_at(p, t) for t in (0.0, 0.2, 0.35, 0.6, 1.2)] == [True, False, True, False, False]
 
@@ -243,5 +272,5 @@ def test_live_drives_leds(tmp_path, cfg):
     assert sim is not None
     on = [led for led, v in leds.changes if v]
     assert on[0] == "yellow" and "green" in on                   # warming up, then GNSS_OK
-    assert on.count("blue") >= 2                                 # JAMMED: blinking
+    assert on.count("red") >= 2 and "blue" not in on            # JAMMED: red blinking (3-LED build)
     assert not any(leds.level.values())                          # close(): all off

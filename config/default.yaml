@@ -157,7 +157,10 @@ overlay:                         # live --overlay PORT: camera overlay (MJPEG), 
 
 outputs:                         # live mode hardware outputs (gnss_guardian/outputs.py); never slow the epoch loop
   leds: auto                     # auto (gpiozero if available, else none) | gpio (warn if unavailable) | off
-  pins: {green: 17, yellow: 27, red: 22, blue: 23}   # BCM (header pins 11, 13, 15, 16); not 14/15 (L86 UART)
+  pins: {green: 17, yellow: 27, red: 22, blue: null}   # BCM (header pins 11, 13, 15); not 14/15 (L86 UART);
+                                 #   null = LED not fitted (4-LED build: blue 23, header pin 16)
+  jam_led: red                   # LED that blinks 2 Hz for jamming: red (3-LED build: red steady = spoofing,
+                                 #   red blinking = jamming) or blue (4-LED build)
   active_high: true              # LED anode on the GPIO through a resistor (330 ohm), cathode to GND
   tick_s: 0.05                   # LED pattern / heartbeat worker period
   safe_action: false             # DEMO ONLY: relay + servo flag for a ground stand-in (--safe-action turns it on).

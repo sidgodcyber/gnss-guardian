@@ -15,8 +15,8 @@ LEDs (BCM pins in outputs.pins; not GPIO14/15, the L86 UART):
   GNSS_OK                     green steady
   WARMING_UP, SUSPECT         yellow steady
   SPOOFED                     red steady
-  JAMMED                      blue blinking 2 Hz
-  VISION_NAV, RETURN_HOME     the alarm's LED (red steady / blue blinking) + green slow blink (camera navigating)
+  JAMMED                      blue blinking 2 Hz (outputs.jam_led: red on a 3-LED build, blue pin null)
+  VISION_NAV, RETURN_HOME     the alarm's LED (red steady / jam LED blinking) + green slow blink (camera navigating)
   HOME_REACHED                the alarm's LED + green double blink
   STALE (no epoch for live.no_data_s)   yellow fast blink, others off
 
@@ -55,10 +55,12 @@ def blink(hz: float) -> tuple:
 DOUBLE = ((True, 0.15), (False, 0.15), (True, 0.15), (False, 0.85))
 
 
-def led_pattern(state: str | None, cause: str | None) -> dict[str, tuple]:
-    """{led: ((level, seconds), ...)} cycled from the moment the pattern starts."""
+def led_pattern(state: str | None, cause: str | None, jam_led: str = "blue") -> dict[str, tuple]:
+    """{led: ((level, seconds), ...)} cycled from the moment the pattern starts. ``jam_led``
+    (outputs.jam_led) is the LED that blinks for jamming: blue, or red on a 3-LED build (red steady =
+    spoofing, red blinking = jamming)."""
     p = {k: OFF for k in LEDS}
-    alarm = {"red": ON} if cause == "spoofing" else {"blue": blink(2.0)} if cause == "jamming" else {}
+    alarm = {"red": ON} if cause == "spoofing" else {jam_led: blink(2.0)} if cause == "jamming" else {}
     if state == "GNSS_OK":
         p["green"] = ON
     elif state in ("WARMING_UP", "SUSPECT", None):
@@ -66,7 +68,7 @@ def led_pattern(state: str | None, cause: str | None) -> dict[str, tuple]:
     elif state == "SPOOFED":
         p["red"] = ON
     elif state == "JAMMED":
-        p["blue"] = blink(2.0)
+        p[jam_led] = blink(2.0)
     elif state in ("VISION_NAV", "RETURN_HOME"):
         p.update(alarm, green=blink(0.5))
     elif state == "HOME_REACHED":
@@ -150,10 +152,12 @@ class GpioLeds:
         bad = {k: p for k, p in pins.items() if p in (14, 15)}
         if bad:
             raise ValueError(f"LED pins {bad} are the L86 UART (GPIO14/15)")
-        self.leds = {k: LED(pins[k], active_high=active_high, initial_value=False) for k in LEDS}
+        self.leds = {k: LED(pins[k], active_high=active_high, initial_value=False) for k in LEDS
+                     if pins.get(k) is not None}           # pin null: that LED is not fitted
 
     def set(self, led, on):
-        (self.leds[led].on if on else self.leds[led].off)()
+        if led in self.leds:
+            (self.leds[led].on if on else self.leds[led].off)()
 
     def close(self):
         for d in self.leds.values():
@@ -289,7 +293,7 @@ class Outputs:
         now = self.clock()
         if (state, cause) != self._shown:
             self._shown, self._t0 = (state, cause), now
-            self._pattern = led_pattern(state, cause)
+            self._pattern = led_pattern(state, cause, self.o.get("jam_led") or "blue")
         for led in LEDS:
             on = level_at(self._pattern[led], now - self._t0)
             if on != self._level[led]:

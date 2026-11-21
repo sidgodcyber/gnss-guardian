@@ -457,15 +457,17 @@ retrain on the deployment's own clean data.
 
 ## Status LEDs and the safe-action output (Uno)
 
-Live mode drives four LEDs on the Pi ([gnss_guardian/outputs.py](gnss_guardian/outputs.py)); pins in `outputs.pins`
+Live mode drives three LEDs on the Pi ([gnss_guardian/outputs.py](gnss_guardian/outputs.py)); pins in `outputs.pins`
 (BCM). Each LED: GPIO → 330 Ω → LED anode, cathode → GND (header pin 14).
 
 | LED (BCM / header pin) | Meaning |
 |---|---|
-| green 17 / 11 | steady: GNSS_OK · slow blink: navigating on the camera (VISION_NAV, RETURN_HOME) · double blink: HOME_REACHED |
+| green 17 / 11 | steady: GNSS_OK · slow blink (0.5 Hz): navigating on the camera (VISION_NAV, RETURN_HOME) · double blink: HOME_REACHED |
 | yellow 27 / 13 | steady: WARMING_UP or SUSPECT · fast blink: no epoch for 3 s (STALE) |
-| red 22 / 15 | steady: spoofing alarm (SPOOFED, and while navigating after it) |
-| blue 23 / 16 | blinking 2 Hz: jamming / blockage alarm (JAMMED, and while navigating after it) |
+| red 22 / 15 | **steady: spoofing** (SPOOFED, and while navigating after it) · **blinking 2 Hz: jamming / blockage** (JAMMED, and while navigating after it) |
+
+A fourth (blue) LED is optional: set `outputs.pins.blue: 23` (header pin 16) and `outputs.jam_led: blue` to
+move the jamming blink to it. With `blue: null` (default) that LED is not driven.
 
 The serial loop only stores the newest state; one worker thread (20 Hz) drives the patterns and the Uno, so
 a slow or broken output never delays detection (a failing backend is dropped with an `outputs_error` event).
