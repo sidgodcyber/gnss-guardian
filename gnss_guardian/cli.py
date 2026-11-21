@@ -13,6 +13,7 @@
     python -m gnss_guardian.cli outputs-test [--safe-action] [--uno /dev/ttyACM0]     (LED / Uno wiring check)
     python -m gnss_guardian.cli ai-train FILE.nmea... --label "real L86, 40 min" [--first-min 40] [--out models/ai_model.json]
     python -m gnss_guardian.cli eval [--runs 10] [--out eval]      (simulator: profiles x ablation table)
+    python -m gnss_guardian.cli incident-report SESSION   /   incident-verify SESSION
     python -m gnss_guardian.cli sky-report FILE.nmea... [--almanac data/almanac.yuma]
     python -m gnss_guardian.cli ai-eval FILE.nmea... [--skip-min 40] [--model models/ai_model.json]
     python -m gnss_guardian.cli vision-bench [--video FILE] [--frames 300] [--scale 0.5] [--threads N]
@@ -445,6 +446,32 @@ def eval_cmd(runs, out, profiles, config_path):
     cfg = load_config(config_path)
     evaluate.evaluate(cfg, runs, Path(out), profiles=list(profiles) or None, echo=click.echo)
     click.echo((Path(out) / "summary.md").read_text(encoding="utf-8"))
+
+
+@cli.command("incident-report")
+@click.argument("session", type=click.Path(exists=True, file_okay=False))
+@click.option("--out", default=None, type=click.Path(file_okay=False), help="Default: SESSION/incidents.")
+def incident_report(session, out):
+    """One report per alarm (md + incidents.json, local only: contains lat/lon) and a hash chain over epochs.jsonl."""
+    from gnss_guardian import incident
+    r = incident.report(session, out)
+    for i in r["incidents"]:
+        tag = f" [DEMO INJECTION: {i['demo_injection']}]" if i["demo_injection"] else ""
+        click.echo(f"incident {i['id']}: {i['type']} {i['start_utc']} -> {i['end_utc'] or 'ongoing'} "
+                   f"({i['duration_s']} s) {' -> '.join(i['state_chain'])}{tag}")
+    click.echo(f"{len(r['incidents'])} incident(s) in {r['out']}; chain head {r['head']}")
+
+
+@cli.command("incident-verify")
+@click.argument("session", type=click.Path(exists=True, file_okay=False))
+@click.option("--out", default=None, type=click.Path(file_okay=False))
+def incident_verify(session, out):
+    """Check epochs.jsonl and the reports against the recorded hash chain."""
+    from gnss_guardian import incident
+    ok, msgs = incident.verify(session, out)
+    for m in msgs:
+        click.echo(m)
+    sys.exit(0 if ok else 1)
 
 
 def main():

@@ -539,6 +539,28 @@ It prints the URLs (the Pi's LAN address):
   guidance page, dashboard, `live.json` and `status` show **DEMO INJECTION ACTIVE** while it runs. No RF is
   transmitted.
 
+## Incident reports
+
+```bash
+gnss-guardian incident-report session/road1    # -> session/road1/incidents/incident_N.md, incidents.json, chain.json
+gnss-guardian incident-verify session/road1    # OK, or which epochs.jsonl lines / report files were changed
+```
+One report per alarm episode (state JAMMED or SPOOFED until GNSS is trusted again) ([gnss_guardian/incident.py](gnss_guardian/incident.py)):
+- **Time:** UTC start, end and duration.
+- **Location:** the last trusted fix, the GNSS-reported fix at the start (may be false) and the fused position
+  at the end.
+- **Interference type and evidence:** the type with its indicators and reasons, and the AI opinion with its
+  model label.
+- **Context:** the state chain and the affected equipment.
+- **Demo injection:** marked as **not a real attack** when one was active.
+- **Logs:** each log file with its SHA-256.
+
+Latitude/longitude appear only in these local files, never in `dashboard.json` or `live.json`. A SHA-256 chain
+over every line of `epochs.jsonl` (kept every 60 lines in `chain.json`) and the hash of each report file make
+edits detectable: `incident-verify` names the 60-line block that changed. The field list (time, location,
+interference type, affected equipment, logs) follows the DGCA advisory circular on GNSS interference reporting
+as far as we could tell; **it is not verified against the official form.**
+
 ## Recording real data
 
 `tools/record_nmea.py` is standalone (pyserial only), so it can be copied to the Pi 4 without the repo:
@@ -612,6 +634,7 @@ gnss_guardian/
   web/server.py            display server: overlay stream, /guide, /live.json, /inject/*   web/pages.py  guide page
   detect/ai.py             AI second opinion: features, IsolationForest/Mahalanobis (JSON, numpy at run time)
   evaluate.py              gnss-guardian eval: simulator profiles x ablation -> results.csv, summary.md
+  incident.py              incident reports (md/json) + SHA-256 hash chain, incident-verify
   inject.py                demo spoof injection into the NMEA before the detector: jump, drift, sky (field demo only)
   trust.py                 GNSS Trust and Nav confidence (display numbers with their reasons)
   outputs.py               status LEDs (gpiozero, import-guarded) and the Uno safe-action heartbeat (demo only)
