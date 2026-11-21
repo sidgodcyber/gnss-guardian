@@ -55,6 +55,8 @@ body{display:flex;flex-direction:column;min-height:100vh;padding:12px 16px env(s
   <div class="row">drift <input id="dv" type="number" value="0.5" step="0.1" min="0.1"> m/s at <input id="db" type="number" value="90"> deg
     <button onclick="inject('drift')">Drift</button></div>
   <div class="row"><button class="stop" onclick="inject('stop')">Stop injection</button> <small id="injmsg"></small></div>
+  <div class="row">sky: azimuths +<input id="sr" type="number" value="15" min="0" max="180"> deg,
+    <input id="sg" type="number" value="2" min="0" max="4"> ghost sats <button onclick="inject('sky')">Sky</button></div>
 </div>
 <div id="home"><h1>HOME REACHED</h1><p id="homep">home keyframe matched</p></div>
 <script>
@@ -91,7 +93,7 @@ function show(v){
     +(fu?` · position from ${fu.source.replace('_',' ')}`:'');
   const inj=v.injection&&v.injection.active;
   $('inj').style.display=inj?'block':'none';
-  if(inj)$('inj').innerHTML=`DEMO INJECTION ACTIVE &mdash; ${inj.type} ${inj.type==='jump'?inj.m+' m':inj.mps+' m/s'} at ${inj.bearing_deg}&deg; (${inj.elapsed_s} s) &mdash; not a real attack`;
+  if(inj)$('inj').innerHTML=`DEMO INJECTION ACTIVE &mdash; ${inj.label||inj.type} (${inj.elapsed_s} s) &mdash; not a real attack`;
   $('demo').style.display=v.injection&&v.injection.enabled?'block':'none';
   $('home').style.display=st==='HOME_REACHED'&&!stale?'flex':'none';
   if(st==='HOME_REACHED'&&vis.home_confirmed)$('homep').textContent=
@@ -117,6 +119,7 @@ async function inject(kind){
     $('injmsg').textContent=r.ok?(kind==='stop'?'stopped':'started'):(j.error||r.status)}
   catch(e){$('injmsg').textContent='failed: '+e}
 }
+  if(kind==='sky')q=`?rot=${$('sr').value}&ghosts=${$('sg').value}`;
 poll();setInterval(poll,1000);
 </script></body></html>
 """

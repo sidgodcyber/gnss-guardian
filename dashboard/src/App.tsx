@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DashboardFile, LoadedSession } from './types/gnssGuardian';
+import { DashboardFile, LoadedSession, injectionLabel } from './types/gnssGuardian';
 import { listServerSessions, loadPickedFolder, loadServerSession, rowIndexAt } from './services/session';
 import { STALE_S, appendLive, emptyLiveFile, fetchLive, liveBase } from './services/live';
 import { AvionicsHeader } from './components/AvionicsHeader';
@@ -163,9 +163,9 @@ export default function App() {
         )}
         {row?.injection && (
           <div className="px-4 py-3 rounded-lg border border-red-400 bg-red-700 text-sm font-bold text-white">
-            DEMO INJECTION ACTIVE: software {row.injection.type}{' '}
-            {row.injection.type === 'jump' ? `${row.injection.m} m` : `${row.injection.mps} m/s`} at {row.injection.bearing_deg}°
-            {' '}({row.injection.offset_m} m offset). Not a real attack: the detector sees a modified NMEA stream.
+            DEMO INJECTION ACTIVE: software {injectionLabel(row.injection)}
+            {row.injection.type === 'sky' ? ' (position unchanged)' : ` (${row.injection.offset_m} m offset)`}.
+            {' '}Not a real attack: the detector sees a modified NMEA stream.
           </div>
         )}
 

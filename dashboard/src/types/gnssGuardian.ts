@@ -131,8 +131,8 @@ export interface Trust {
 // Demo spoof injection (software, before the detector): never a real attack.
 export interface Injection {
   id: number;
-  type: 'jump' | 'drift';
-  bearing_deg: number;
+  type: 'jump' | 'drift' | 'sky';
+  bearing_deg: number | null;       // null for sky
   m: number | null;
   mps: number | null;
   elapsed_s: number;
@@ -148,10 +148,20 @@ export interface LiveView {
   seq: number;
   t: number;
   t_gnss: string;
+  rot_deg?: number | null;          // sky: GPS azimuths rotated by this
+  ghosts?: number | null;           // sky: below-horizon PRNs added to the GPS satellite list
+  ghost_prns?: string[] | null;
+  label?: string;                   // one line, e.g. "sky: GPS azimuths +15 deg, 2 ghost satellites (G04 G09)"
   state: GuardianState | null;
   labels: string[];
   home: { set: boolean; detail: string } | null;
   home_keyframe: { status: string; detail: string; features?: number } | null;
+export function injectionLabel(inj: Injection): string {
+  if (inj.label) return inj.label;
+  if (inj.type === 'sky') return `sky: GPS azimuths +${inj.rot_deg} deg, ${inj.ghosts} ghost satellites`;
+  return `${inj.type} ${inj.type === 'jump' ? `${inj.m} m` : `${inj.mps} m/s`} at ${inj.bearing_deg} deg`;
+}
+
   vision: { fps: number | null; mode: string | null; aligned: boolean | null } | null;
   injection: { enabled: boolean; active: Injection | null };
   track: Array<[number, number, number, string]>;

@@ -14,7 +14,7 @@ with --demo-inject software spoof injection into the NMEA stream before the dete
                        [--overlay PORT [--overlay-record] [--demo-inject]]
 
 Demo injection: raw/ keeps the NMEA exactly as received; detector_input/ the stream the detector saw
-(raw plus the injected offsets); every start/stop is a demo_inject event.
+(raw plus the injected offsets or rewritten GPS satellite list); every start/stop is a demo_inject event.
 
 Time: mono = time.monotonic() x clock_scale (clock_scale > 1 only to pair with a fast simulator).
 No network is used: the port is a device or the pyserial URL the user passes.
@@ -290,7 +290,12 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
         nav, cam_thread = start_camera(camera, cfg, out_dir, writer, lambda: time.monotonic() * clock_scale)
     pipe = Pipeline(cfg, writer, home, echo=lambda s: log.info(s), vision=nav)
     raw = RawNmeaLog(out_dir / "raw")
-    injector = DemoInjector(clock=lambda: time.monotonic() * clock_scale) if demo_inject else None
+    injector = None
+    if demo_inject:
+        from gnss_guardian.config import ROOT
+        from gnss_guardian.detect.sky import SkyCheck
+        injector = DemoInjector(clock=lambda: time.monotonic() * clock_scale, almanac=SkyCheck(cfg, ROOT).alm,
+                                leap_s=cfg["detect"]["sky"]["leap_s"])
     det_raw = RawNmeaLog(out_dir / "detector_input") if injector else None
     pending_events: deque = deque()                 # from the display server's thread, logged by this one
     out_events: deque = deque()                     # from the outputs thread (LEDs, Uno link)
@@ -411,10 +416,12 @@ def run_live(port: str, baud: int, out_dir, cfg: dict, rate: int = 1, constellat
                 for bl in lines:
                     line = bl.decode("ascii", errors="replace").strip()
                     raw.write(line, host)
-                    if injector is not None:              # demo only: the detector sees the modified line
-                        line = injector.apply(line)
-                        det_raw.write(line, host)
-                    handle(pipe.feed(line, host, m))
+                    if injector is None:
+                        handle(pipe.feed(line, host, m))
+                        continue
+                    for ln in injector.feed(line):        # demo only: the detector sees the modified lines
+                        det_raw.write(ln, host)
+                        handle(pipe.feed(ln, host, m))
                 raw.flush()
                 if det_raw is not None:
                     det_raw.flush()

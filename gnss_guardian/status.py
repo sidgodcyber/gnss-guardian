@@ -78,7 +78,8 @@ def status_line(folder: str | Path, tz: str = "Asia/Kolkata", now: datetime | No
     live, _ = _latest(folder, "live.json")
     inj = ((live or {}).get("injection") or {}).get("active")
     if inj:                                          # demo only: never let it pass for a real attack
-        parts.insert(0, f"DEMO INJECTION ACTIVE ({inj['type']}, {inj['offset_m']} m)")
+        what = inj.get("label") or inj["type"] if inj["type"] == "sky" else f"{inj['type']}, {inj['offset_m']} m"
+        parts.insert(0, f"DEMO INJECTION ACTIVE ({what})")
     if stale:
         return (f"{clock} | STALE: last epoch {age:.0f} s old (receiver silent or live mode stopped) | {head} | "
                 f"last: {' | '.join(parts)}"), True

@@ -1,7 +1,7 @@
 // Live source: poll http://<pi>:PORT/live.json (served by `gnss-guardian live --overlay PORT`) once a
 // second and grow a DashboardFile from it, so the replay panels show the running session. The Pi
 // sends CORS headers for this; nothing is sent to the Pi except the GET.
-import { DashboardFile, LiveView, Row, Transition } from '../types/gnssGuardian';
+import { DashboardFile, LiveView, Row, Transition, injectionLabel } from '../types/gnssGuardian';
 
 export const STALE_S = 3;
 
@@ -71,7 +71,7 @@ export function appendLive(file: DashboardFile, view: LiveView): DashboardFile {
   const inj = view.injection.active;
   if (inj && (!wasInj || wasInj.id !== inj.id)) {
     events.push({ t: row.t, kind: 'demo_inject',
-                  detail: `DEMO INJECTION ${inj.type} ${inj.type === 'jump' ? `${inj.m} m` : `${inj.mps} m/s`} at ${inj.bearing_deg}° (software, not a real attack)` });
+                  detail: `DEMO INJECTION ${injectionLabel(inj)} (software, not a real attack)` });
   } else if (!inj && wasInj) {
     events.push({ t: row.t, kind: 'demo_inject', detail: 'demo injection stopped' });
   }

@@ -161,9 +161,12 @@ def _frame_times(video: Path, frames_csv: Path | None, video_start) -> list[floa
 def _injection_text(ev: dict) -> str:
     if ev["action"] == "stop":
         return "demo injection stopped"
-    size = f"{ev.get('m')} m" if ev["action"] == "jump" else f"{ev.get('mps')} m/s"
-    return (f"DEMO INJECTION {ev['action']} {size} at {ev.get('bearing_deg')} deg (software, before the detector; "
-            f"not a real attack)")
+    if ev["action"] == "sky":
+        what = ev.get("label") or "sky"
+    else:
+        size = f"{ev.get('m')} m" if ev["action"] == "jump" else f"{ev.get('mps')} m/s"
+        what = f"{ev['action']} {size} at {ev.get('bearing_deg')} deg"
+    return f"DEMO INJECTION {what} (software, before the detector; not a real attack)"
 
 
 def _injections(events: list[dict], t0: float) -> list[tuple[float, float, dict | None]]:
@@ -177,7 +180,8 @@ def _injections(events: list[dict], t0: float) -> list[tuple[float, float, dict 
             out.append((cur[0], t, cur[1]))
             cur = None
         if ev["action"] != "stop":
-            cur = (t, {k: ev.get(k) for k in ("id", "type", "bearing_deg", "m", "mps")})
+            cur = (t, {k: ev.get(k) for k in ("id", "type", "bearing_deg", "m", "mps", "rot_deg", "ghosts",
+                                              "ghost_prns", "label")})
     if cur is not None:
         out.append((cur[0], math.inf, cur[1]))
     return out
@@ -186,7 +190,7 @@ def _injections(events: list[dict], t0: float) -> list[tuple[float, float, dict 
 def _injection_at(spans, t: float) -> dict | None:
     for a, b, inj in spans:
         if a <= t < b:
-            d = inj["m"] if inj["type"] == "jump" else round(inj["mps"] * (t - a), 1)
+            d = {"jump": inj["m"], "sky": 0.0}.get(inj["type"]) if inj["type"] != "drift" else round(inj["mps"] * (t - a), 1)
             return {**inj, "elapsed_s": round(t - a, 1), "offset_m": d}
     return None
 

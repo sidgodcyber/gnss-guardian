@@ -144,6 +144,8 @@ not as jamming. All thresholds are in [config/default.yaml](config/default.yaml)
 | `--spoof sky` (`--sky` almanac; azimuths +30°, 2 below-horizon PRNs, natural C/N0, 1 m/s natural drift) | sky check off: none from GNSS alone (a simulated camera velocity feed catches the drift, test bound ≤ 5 s); sky check on: spoofing, no camera | 0 s |
 | `--spoof sky`, azimuth rotation only | sky check | 5°: not detected (median 4.0°); 8°: SUSPECT only; 10°: 1 s; 15°: 0 s |
 | `--spoof sky`, below-horizon PRNs only | sky check | 1 PRN: SUSPECT only; 2 PRNs: 0 s |
+| Demo **Sky** injection on the `--sky` walk (`tests/test_inject_sky.py`): +15° and 2 ghosts / +15° only / 2 ghosts only | sky check, camera off; nothing with the check off (the position never moves) | 0 s each |
+| Same, live against the simulator through `/inject/sky`, camera off | SPOOFED, GNSS Trust 10, position lines identical to `raw/`; after **Stop** GNSS_OK again when the 30 s latch ran out | 2 s (simulator time) |
 
 Sky model check: the almanac prediction against the real GSV of the phone proxies (integer degrees): median
 0.64° / max 1.44° (18 Oct, almanac of 18 Oct), median 0.39° / max 0.77° (20 Oct, almanac of 20 Oct).
@@ -444,7 +446,9 @@ It prints the URLs (the Pi's LAN address):
    stored" (about 90 s; status says why if home waits).
 2. Walk out 20–40 m with GNSS trusted (the first straight 2 m aligns the camera heading; keyframes every 2 m).
 3. Spoof: on the guidance page press **Drift** (e.g. 0.5–1 m/s at 90°) or **Jump** (e.g. 30 m), or cover
-   the antenna with foil (real blockage → JAMMED).
+   the antenna with foil (real blockage → JAMMED). **Sky** (default +15°, 2 ghost satellites) leaves the
+   position alone and gives the GPS satellites a wrong sky: the camera rightly sees nothing wrong, the sky
+   check alone raises SPOOFED. Needs the almanac (`data/almanac.yuma`), and the L86 must report az/el.
 4. The module goes SPOOFED (or JAMMED) → VISION_NAV → RETURN_HOME; follow the arrow back.
 5. HOME_REACHED when the home keyframe matches. Press **Stop injection**: GNSS returns only after it agrees
    with the camera for 10 s (the latch).
@@ -455,7 +459,9 @@ It prints the URLs (the Pi's LAN address):
 - *Real:* the satellites, C/N0, HDOP, time and fix from the L86; the camera, odometry, keyframes, home match;
   the detector, state machine and guidance; a foil cover.
 - *Injected (demo only):* the reported position (and, for a drift, the reported speed/course) is rewritten
-  in software before the detector, which is not told. `raw/` keeps the NMEA exactly as received,
+  in software before the detector, which is not told. For **Sky** only the `$GPGSV` group is rewritten:
+  every GPS azimuth rotated, and PRNs the almanac puts below −10° at the last real fix added at 25°/40°/55°
+  elevation with an elevation-like C/N0. `raw/` keeps the NMEA exactly as received,
   `detector_input/` what the detector saw; every start/stop is a `demo_inject` event, and the overlay,
   guidance page, dashboard, `live.json` and `status` show **DEMO INJECTION ACTIVE** while it runs. No RF is
   transmitted.

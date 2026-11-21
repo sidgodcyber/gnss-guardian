@@ -8,6 +8,7 @@ except the demo-injection controls when live runs with --demo-inject.
     http://<pi>:PORT/live.json      the live view (also written to session/<name>/live.json)
     POST /inject/jump?m=30&bearing=90     demo injection (only with --demo-inject)
     POST /inject/drift?mps=0.5&bearing=90
+    POST /inject/sky?rot=15&ghosts=2      GPS azimuths rotated, ghost PRNs added (needs the almanac)
     POST /inject/stop
 
 It listens on the local network only for viewers; nothing is sent anywhere. If the port cannot be
@@ -134,6 +135,8 @@ class _Handler(BaseHTTPRequestHandler):
                 result = inj.start("jump", float(q.get("bearing", 0)), m=float(q.get("m", 0)))
             elif kind == "drift":
                 result = inj.start("drift", float(q.get("bearing", 0)), mps=float(q.get("mps", 0)))
+            elif kind == "sky":
+                result = inj.start("sky", rot_deg=float(q.get("rot", 15)), ghosts=int(q.get("ghosts", 2)))
             else:
                 return self._json(404, {"error": f"unknown injection {kind!r}"})
         except ValueError as e:
