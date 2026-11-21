@@ -1,0 +1,27 @@
+# Sessions (live, replay) and scratch recordings stay local; test fixtures live in tests/fixtures/.
+session/
+data/
+*.nmea.tmp
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+/synth/
+/demo/
+/*.nmea
+/*.avi
+# Teammate dashboard archive and its raw extraction (the kept source lives in dashboard/).
+/*.zip
+/agriiiii*/
+# Real recordings (record_session.py, standalone Pi recorders) and dashboard exports, at any depth.
+recordings/
+**/gnss.nmea
+**/camera.avi
+**/video.avi
+**/frames.csv
+*.webm
+.env

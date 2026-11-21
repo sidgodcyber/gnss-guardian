@@ -1,0 +1,186 @@
+# gnss-guardian default configuration. Every detection threshold lives here.
+# Times are UTC; display_tz is used only for the status line.
+# Runtime inputs are on-board only: L86 (GNSS), Pi Camera (vision, Phase 2).
+
+node_id: guardian-01
+display_tz: Asia/Kolkata
+
+rig:
+  max_speed_mps: 3.0             # handheld pole rig; a real drone profile would raise this
+
+camera:                          # Pi Camera Rev 1.3 (OV5647), pointing straight down
+  source: auto                   # auto (Picamera2, else usb:0) | picam | usb:N | video:PATH
+  width: 640
+  height: 480
+  fps: 30
+  max_exposure_us: 3000          # shutter cap (Pi camera): 1.5 m/s x 3 ms = 4.5 mm = 2.9 px of blur at 640 px,
+                                 #   1 m up; brightness then comes from gain (ExposureCap). null = libcamera auto
+  hfov_deg: 53.5                 # OV5647 horizontal field of view (datasheet); calibrate refines focal_px
+  height_m: 1.0                  # lens above the ground on the rig
+  focal_px: null                 # fitted by `gnss-guardian calibrate` (at width px); null = from hfov_deg
+  calibration_file: config/calibration.yaml   # merged over this file when present (written by calibrate)
+
+vision:
+  process_scale: 0.5             # flow on a downscaled image (0.5 = 320x240): Pi 4 bench 30 fps (camera-capped)
+                                 #   at 0.5 against 15.7 fps at 1.0, with GNSS live
+  max_corners: 200               # Shi-Tomasi corners (RANSAC needs far fewer; LK cost scales with this)
+  corner_quality: 0.01
+  corner_min_dist_px: 8
+  redetect_below: 100            # re-detect corners when fewer tracks survive
+  lk_win_px: 15                  # pyramidal Lucas-Kanade window, levels, iterations
+  lk_levels: 3                   #   (3 levels follow ~30 px/frame: 1.4 m/s at 30 fps, 1 m up)
+  lk_iters: 20
+  fb_check: true                 # forward-backward check (doubles LK cost; RANSAC alone also rejects outliers)
+  fb_max_px: 1.0                 # forward-backward check: drop tracks that do not return within this
+  ransac_px: 2.0                 # similarity (rotation + translation + scale) RANSAC threshold
+  min_inliers: 20                # fewer: the frame gives no motion (low texture, blur)
+  full_quality_inliers: 80       # quality = min(1, inliers / this) x inlier ratio x fit
+  low_quality: 0.3               # below: frame flagged low_texture
+  max_skip_frames: 5             # failed frames bridged by keeping the flow's reference frame (turns, blur)
+  orb_fallback: true             # when Lucas-Kanade fails, try ORB matching (a turn starting abruptly)
+  hold_s: 0.5                    # low texture: keep the last velocity this long, then stop and flag vision_lost
+  velocity_window_s: 1.0         # velocity for the spoofing cross-check: displacement over this window
+  heading_align_tau_s: 20        # while GNSS is trusted and moving, the camera heading follows the GNSS course
+  align_min_speed_mps: 0.5       #   with this time constant (also learns the camera's mount yaw),
+  heading_align_window_s: 2      #   only on straight stretches: GNSS course and camera heading both
+  heading_align_max_turn_deg: 10 #   within this many degrees over the window
+  align_snap_min_m: 2.0          # the first alignment waits for this much straight travel
+  anchor_delay_s: 3              # vision track = GNSS fix this old + camera displacement since (a spoof that
+                                 #   is caught within this delay never becomes the anchor)
+  stationary_m: 0.3              # camera moved less than this since the anchor: keep the anchor (GNSS wander
+                                 #   while the rig stands still does not move the vision position)
+
+keyframes:                       # visual terrain map, built while GNSS is trusted
+  spacing_m: 2.0                 # a keyframe every N m of travel (plus the home keyframe)
+  orb_features: 500
+  match_every_n_frames: 5        # during vision navigation, try a keyframe match this often
+  search_radius_m: 10            # keyframes within this distance of the current estimate are candidates
+  ratio: 0.75                    # Lowe ratio test
+  min_inliers: 20
+  max_correction_m: 8            # a match implying a larger jump is rejected
+  correction_gain: 0.5           # blend of the keyframe position into the vision position
+  home_confirm_m: 1.5            # home reached: home keyframe matched with the camera within this distance
+  home_min_features: 120         # the home keyframe needs this many ORB features (retried every frame until
+                                 #   then, while the camera stays within home_confirm_m of where home was set)
+  home_match:                    # strict match against the home keyframe (tried on every match cycle, at any
+    ratio: 0.7                   #   distance): it resets the vision position to home and allows HOME_REACHED.
+    min_inliers: 60              #   Repetitive ground (crop rows, road markings, tiles) fails the Lowe ratio
+    min_inlier_ratio: 0.5        #   test or the inlier ratio, so it cannot confirm home.
+
+home:
+  set_after_s: 30                # home = median of N s of trusted fixes after warm-up (unless --home) ...
+  max_hdop: 2.5                  # ... once the window's median HDOP is at most this,
+  min_sats_used: 6               #     its median satellites used at least this,
+  max_spread_m: 4.0              #     and every fix lies within this of the median (indoor wander fails);
+                                 #   otherwise the window slides on and status says why
+
+state:                           # Phase 3 state machine (gnss_guardian/state.py), one step per GNSS epoch:
+                                 # GNSS_OK -> SUSPECT -> JAMMED | SPOOFED -> VISION_NAV -> RETURN_HOME -> HOME_REACHED
+  return_home_after_s: 2         # VISION_NAV with a tracking camera this long -> RETURN_HOME (tracking: dead
+                                 #   reckoning, not vision_lost; the heading need not be aligned yet, but then
+                                 #   guidance bearings are flagged heading_aligned: false)
+  home_radius_m: 2.0             # HOME_REACHED: camera position within this of home ...
+  home_match_max_age_s: 3        # ... and the home keyframe matched within this many s (when there is one)
+  home_leave_m: 4.0              # HOME_REACHED -> RETURN_HOME when the camera position moves further away
+  spoof_release:                 # SPOOFED (and the states after it) -> GNSS_OK only after GNSS and the camera
+    agree_s: 10                  #   agree this many seconds in a row; GNSS stays untrusted until then, even
+    max_pos_diff_m: 3.0          #   if the detector clears by itself. Agreement: GNSS within this of the
+    max_vel_diff_mps: 0.3        #   camera position, GNSS-minus-camera velocity (3 s mean) below this,
+    max_score: 0.3               #   spoofing score below this, jamming CLEAR, fix valid.
+                                 # Without a camera the detector's own latch (min_alarm_s) releases it.
+                                 # Jamming releases when the detectors are CLEAR again.
+
+guidance:                        # return-home guidance: advisory output only, never a command to the aircraft
+  waypoint_reached_m: 1.5        # reverse breadcrumb path: a keyframe waypoint counts as passed within this
+
+l86:
+  talkers:                       # NMEA talker -> constellation
+    GP: GPS
+    GL: GLONASS
+    GA: Galileo
+    GB: BeiDou
+    BD: BeiDou
+    GQ: QZSS
+    PQ: QZSS
+    GI: NavIC
+  galileo_check_s: 15            # after PMTK353, GAGSV must appear within this many data seconds
+  antenna_status: true           # send PGCMD,33,1 on open: MTK modules then report PGTOP,11,x every fix (the
+                                 #   GPTXT ANTSTATUS banner appears only at power-up). Not yet verified on our L86.
+
+overlay:                         # live --overlay PORT: camera overlay (MJPEG), guidance page, live.json
+  fps: 5                         # overlay frames per second (320x240), drawn in their own thread
+  min_fps: 1                     # ... lowered toward this whenever the camera thread runs below
+  protect_vision_frac: 0.9       #     this fraction of camera.fps: the overlay gives way, not the vision
+  jpeg_quality: 70
+
+live:
+  reconnect_s: 2                 # serial retry interval after unplug / open failure
+  silence_reopen_s: 10           # no bytes for this long (wall s): event no_serial_data and reopen the port
+  no_data_s: 3                   # no epoch for this long: verdict "no_data" (GNSS not trusted, not a jam)
+  read_timeout_s: 0.2            # an empty read this long ends the NMEA burst: the epoch is emitted at once
+  rate_measure_s: 30             # after a 5/10 Hz setup, measure the real epoch rate over this many seconds
+
+detect:
+  baseline:
+    window_s: 60                 # rolling per-satellite C/N0 median over clean epochs only
+    min_samples: 20              # a satellite needs this many baseline samples before it counts
+    warmup_s: 60                 # no verdicts beyond "warming_up" until this much clean data
+    min_base_cn0_dbhz: 25        # satellites weaker than this in the baseline are too noisy to judge drops
+    min_base_sats: 4             # fewer judged satellites: jamming score not computed (reason given)
+    time_offset_samples: 30      # GNSS-minus-monotonic offset baseline (median of the last N clean epochs)
+  elev_mask_deg: 5               # C/N0 mean/std use satellites at or above this elevation
+
+  jamming:                       # "GNSS denied: jamming or blockage" (no AGC on the L86: RF jamming,
+                                 #  foil, buildings and canopy look the same)
+    drop_db: 6                   # a satellite has "dropped" when C/N0 <= baseline - drop_db (or is lost)
+    lost_cn0_dbhz: 10            # C/N0 assumed for a lost satellite when averaging the drop
+    drop_frac: [0.25, 0.6]       # ramp: fraction of judged satellites dropped -> 0..1
+    mean_drop_db: [3, 10]        # ramp: mean C/N0 drop over judged satellites
+    lost_frac: [0.2, 0.6]        # ramp: fraction of judged satellites no longer tracked
+    hdop_ratio: [1.5, 3.0]       # ramp: HDOP / baseline HDOP
+    weights: {drop_frac: 0.45, mean_drop: 0.25, lost_frac: 0.15, hdop: 0.05, fix_lost: 0.10}
+    fix_lost_with_drop: 0.5      # fix lost while at least this fraction dropped: score >= 0.9
+    sky_change_min_tracked: 3    # if at least this many judged satellites are still tracked ...
+    sky_change_scale: 0.4        # ... and their median drop is < drop_db / 2, scale the score by this
+                                 # (satellites lost but the rest unchanged: a wall, or a spoofer's new sky)
+    few_sats_judged: 6           # fewer judged satellites (indoors): the score is capped at few_sats_cap
+    few_sats_cap: 0.55           #   (SUSPECT, below alarm_on) unless the fix is lost with them (foil)
+
+  spoofing:                      # noisy-OR: any one strong indicator can raise the alarm alone
+    jump_slack_m: 8              # position noise allowance before an implied speed counts
+    speed_ramp_x: [1.0, 2.0]     # ramp on speed / rig.max_speed_mps (implied or reported)
+    alt_rate_mps: [10, 30]       # ramp on |d altitude| / dt
+    time_jump_s: [0.8, 2.0]      # ramp on |GNSS-minus-monotonic offset - baseline|
+    uniform_std_db: [3.0, 1.5]   # ramp: C/N0 std across satellites falling from 3.0 to 1.5 dB ...
+    uniform_mean_dbhz: [40, 45]  # ... while the mean C/N0 is high
+    uniform_min_sats: 5
+    newcomer_frac: [0.25, 0.6]   # ramp: tracked satellites not seen in the baseline window
+    newcomer_min_sats: 4
+    vision_window_s: 3           # GNSS-minus-vision velocity averaged over this window ...
+    vision_diff_mps: [0.4, 1.0]  # ... ramp on |mean difference| (fast drag-off)
+    vision_long_window_s: 10     # and over this longer window ...
+    vision_drift_mps: [0.2, 0.45]  # ... ramp (slow drag-off: 0.5 m/s builds 5 m of disagreement in 10 s)
+    vision_pos_window_s: 30      # GNSS displacement vs camera displacement over this window (3 s means at
+    vision_pos_drift_m: [3, 6]   #   both ends): ramp on the difference. Works before the heading is aligned
+                                 #   (then compares lengths only), and on a receiver that reports speed 0 while
+                                 #   its position wanders (0.2 m/s with a still camera: 6 m in 30 s)
+                                 # vision thresholds: set from synthetic walks only so far
+    vision_min_quality: 0.5
+    vision_max_age_s: 1.5
+    weights: {speed: 0.95, time: 0.95, altitude: 0.7, uniform_cn0: 0.55, newcomers: 0.5, vision: 0.8,
+              vision_pos: 0.8}
+    gate_kinematic_when_jammed: true   # a degraded fix under jamming jumps around: not attributed to spoofing
+    degraded_recent_s: 10        # a jump within this long of a jamming alarm/suspect or a fix gap still alarms
+                                 #   (jam-then-spoof is a real attack) with the reason "jump after degraded fix"
+
+  hysteresis:                    # per detector: CLEAR -> SUSPECT -> ALARM
+    suspect_on: 0.35
+    suspect_off: 0.2
+    suspect_hold_s: 3            # score below suspect_off this long: SUSPECT -> CLEAR
+    alarm_on: 0.6
+    alarm_k: 2                   # consecutive epochs >= alarm_on ...
+    alarm_immediate: 0.8         # ... or a single epoch >= this
+    alarm_off: 0.3
+    alarm_hold_s: 5              # score below alarm_off this long: ALARM -> SUSPECT
+    min_alarm_s: {jamming: 0, spoofing: 30}   # a spoof stays latched; with a camera the state machine
+                                              #   releases it on vision agreement (state.spoof_release)
