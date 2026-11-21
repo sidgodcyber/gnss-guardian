@@ -108,6 +108,30 @@ trust:                           # display numbers (gnss_guardian/trust.py); not
     stale_cap: 20                # camera track lost (position held)
     bands: [70, 40]
 
+ai:                              # AI second opinion (gnss_guardian/detect/ai.py): advisory, never lowers a score
+  enabled: true
+  model_file: models/ai_model.json   # gnss-guardian ai-train; missing -> AI off (ai_model event says why)
+  backend: auto                  # auto (IsolationForest if the model has one, else Mahalanobis) | iforest | mahalanobis
+  suspect_on: 0.5                # AI level SUSPECT: score >= suspect_on in on_n of the last on_window epochs
+  on_n: 3
+  on_window: 5
+  suspect_off: 0.25              # back to CLEAR after clear_n epochs below this
+  clear_n: 5
+  boost_min_rule: 0.35           # corroboration only while the rule spoofing score is at least this ...
+  boost_weight: 0.5              # ... spoofing = 1 - (1 - rule)(1 - boost_weight * ai)
+  explain_z: 3.0                 # reasons: features at least this many robust SD from the clean centre
+  train:
+    min_epochs: 300
+    calib_quantile: 0.995        # score 0 at this quantile of the training scores ...
+    full_z: 8                    # ... 1 at the score of one feature this many robust SD from the centre
+    shrink: 0.1                  # Mahalanobis covariance shrinkage toward the identity
+    n_estimators: 50             # IsolationForest (exported to JSON; numpy only at run time)
+    max_samples: 128
+    seed: 0
+    scale_floor: {cn0_std: 0.5, mean_drop_db: 0.5, tracked_drop_db: 0.5, lost_frac: 0.05, hdop_ratio: 0.05,
+                  newcomer_frac: 0.05, speed_mismatch_mps: 0.3, alt_rate_mps: 0.3, time_jump_s: 0.05,
+                  cn0_step_db: 0.3, used_frac: 0.05}
+
 guidance:                        # return-home guidance: advisory output only, never a command to the aircraft
   waypoint_reached_m: 1.5        # reverse breadcrumb path: a keyframe waypoint counts as passed within this
 

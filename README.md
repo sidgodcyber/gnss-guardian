@@ -382,6 +382,44 @@ cards and the dashboard's trust breakdown.
   camera heading is not aligned; capped at 20 when the camera track is lost (position held).
   These weights are a first choice, not fitted to measured drift.
 
+## AI second opinion (advisory)
+
+An anomaly model of clean epochs ([gnss_guardian/detect/ai.py](gnss_guardian/detect/ai.py), settings in `ai:`)
+scores every warmed-up epoch 0–1 from 11 features: C/N0 spread and its drop against the clean baseline, lost
+and newcomer satellites, HDOP against the baseline, reported vs implied speed, altitude rate, GNSS-vs-host
+clock jumps, the C/N0 step from the last epoch and the used/tracked share (robust-scaled against the training
+epochs). The rule detectors stay in charge:
+
+- **Advisory level:** CLEAR or SUSPECT only (score ≥ 0.5 in 3 of the last 5 epochs). It never changes
+  `gnss_trusted`, the state machine or the spoof latch. It costs up to 20 points of GNSS Trust and is shown
+  with its reasons (e.g. `AI_TRACKED_DROP_HIGH`) on the guidance page, in `live.json` and on the dashboard.
+- **Corroboration:** only while the rule spoofing score is ≥ 0.35, spoofing = 1 − (1 − rule)(1 − 0.5 × AI).
+  It can only raise a score. It never lowers one, never clears an alarm, never releases the latch (tested
+  epoch by epoch on every simulator profile: with the AI each spoofing score and level is ≥ without it).
+- **The model on disk says what it was trained on,** and that label travels with every output.
+  `models/ai_model.json` is currently **provisional, not real L86** (a 30 min simulator walk and the two phone
+  proxies). Nothing measured with it goes in the tables above.
+- **Two methods, numpy only on the Pi:** `ai-train` fits an IsolationForest (scikit-learn, laptop) and a
+  Mahalanobis model (always), both exported to JSON. The forest is kept only if it separates a single feature
+  8 robust SD out from its own training epochs. On the provisional data it does not (one far-out feature scores
+  below the training 99.5 % quantile: each shallow tree splits on few of the 11 features), so the model carries
+  Mahalanobis only and records why (`trained.iforest_rejected`). This is re-checked on the real recording.
+
+```bash
+# 60 min clean L86 recording: train on the first 40 min, judge the last 20
+gnss-guardian ai-train tests/fixtures/real_l86_clean.nmea --first-min 40 --label "real L86, first 40 min of 60"
+gnss-guardian ai-eval tests/fixtures/real_l86_clean.nmea --skip-min 40
+```
+
+| Measured | AI SUSPECT episodes per hour on held-out clean data |
+|---|---|
+| Real L86, last 20 min of the 60 min recording | pending: the recording is not in yet |
+
+Limits: the AI sees only what the features carry. On the simulator it reaches its own SUSPECT within 3 s on the
+jams and spoofs the rules already catch, and it misses the same natural-C/N0 drift the rules miss. It does not
+replace the camera cross-check. A model trained at one site and antenna may flag another site's normal sky:
+retrain on the deployment's own clean data.
+
 ## Status LEDs and the safe-action output (Uno)
 
 Live mode drives four LEDs on the Pi ([gnss_guardian/outputs.py](gnss_guardian/outputs.py)); pins in `outputs.pins`
@@ -507,7 +545,8 @@ gnss_guardian/
   livehub.py               live view (live.json) shared by the serial loop, overlay and display server
   overlay.py               camera overlay frames (own thread), MJPEG source, overlay.mp4
   web/server.py            display server: overlay stream, /guide, /live.json, /inject/*   web/pages.py  guide page
-  inject.py                demo spoof injection into the NMEA before the detector (field demo only)
+  detect/ai.py             AI second opinion: features, IsolationForest/Mahalanobis (JSON, numpy at run time)
+  inject.py                demo spoof injection into the NMEA before the detector: jump, drift, sky (field demo only)
   trust.py                 GNSS Trust and Nav confidence (display numbers with their reasons)
   outputs.py               status LEDs (gpiozero, import-guarded) and the Uno safe-action heartbeat (demo only)
 firmware/uno_safe_action/  Arduino Uno sketch: relay + servo flag, 3 s heartbeat watchdog -> SAFE

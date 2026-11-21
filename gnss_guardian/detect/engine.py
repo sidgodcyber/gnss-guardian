@@ -6,6 +6,9 @@
     eng.vision_track = nav.displacement   # camera displacement for the 30 s GNSS-vs-camera check
     eng.release_spoofing()                # Phase 3: GNSS and the camera agreed, drop the spoof latch
 
+The AI second opinion (detect/ai.py, ai.model_file) adds v["ai"] (advisory, CLEAR/SUSPECT) and may only
+raise the spoofing score, while the rule score is already >= ai.boost_min_rule.
+
 GNSS is trusted only when the baseline is warm, the fix is valid and both detectors are CLEAR.
 The baseline grows only from epochs that both detectors call clean.
 """
@@ -13,6 +16,8 @@ from __future__ import annotations
 
 import math
 
+from gnss_guardian.config import ROOT
+from gnss_guardian.detect.ai import AISecondOpinion, corroborate
 from gnss_guardian.detect.features import FeatureExtractor
 from gnss_guardian.detect.hysteresis import ALARM, CLEAR, Hysteresis
 from gnss_guardian.detect.jamming import LABEL as JAM_LABEL
@@ -53,6 +58,7 @@ class DetectionEngine:
         self._vision: tuple | None = None
         self._degraded_t: float | None = None        # last epoch with jamming signs or no fix
         self.vision_track = None
+        self.ai = AISecondOpinion(cfg, root=ROOT) if "ai" in cfg else None
 
     @property
     def baseline(self):
@@ -84,6 +90,14 @@ class DetectionEngine:
             js = self.jam.score(f)
             jammed = self.h_jam.level != CLEAR or js.value >= self.suspect_on
             ss = self.spoof.score(f, jammed=jammed)
+        ai = self.ai.update(f, warming) if self.ai is not None else None
+        if ai is not None and not warming:
+            boosted = corroborate(ss.value, ai, self.cfg)
+            if boosted > ss.value:                   # only ever up: never lowers, clears or releases
+                ss.parts["ai_corroboration"] = boosted - ss.value
+                ss.reasons.append(f"AI second opinion agrees (score {ai['score']:.2f}): "
+                                  f"+{boosted - ss.value:.2f}")
+                ss.value = boosted
         if not ep.fix_valid or (f["fix_gap_s"] or 0) > 2.5 or self.h_jam.level != CLEAR or \
                 js.value >= self.suspect_on:
             self._degraded_t = t
@@ -113,5 +127,6 @@ class DetectionEngine:
             "jamming": {"level": lj, "changed": cj, **js.as_dict()},
             "spoofing": {"level": ls, "changed": cs, **ss.as_dict()},
             "features": {k: _r(f.get(k)) for k in FEATURE_KEYS},
+            "ai": ai,
             "sats": {k: [_r(s.cn0, 1), _r(s.elev, 0), s.used] for k, s in sorted(ep.sats.items())},
         }

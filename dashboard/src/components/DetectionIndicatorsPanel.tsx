@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { DashboardFile, Detector, GuardianState, IndicatorDef, Level, Row, TrustScore } from '../types/gnssGuardian';
+import { AIOpinion, DashboardFile, Detector, GuardianState, IndicatorDef, Level, Row, TrustScore } from '../types/gnssGuardian';
 import { fmt, fmtTime, stateLabel } from '../services/session';
 
 interface Props {
@@ -162,6 +162,24 @@ const TrustBreakdown: React.FC<{ title: string; t: TrustScore | null | undefined
   </div>
 );
 
+// AI second opinion: advisory score, its level, why, and what the model was trained on.
+const AICard: React.FC<{ a: AIOpinion | null | undefined }> = ({ a }) => (
+  <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
+    <div className="flex items-baseline justify-between">
+      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold font-sans">AI second opinion (advisory)</span>
+      <span className={`text-lg font-bold ${!a ? 'text-slate-500' : a.level === 'SUSPECT' ? 'text-amber-300' : 'text-emerald-300'}`}>
+        {a ? `${a.level} ${a.score.toFixed(2)}` : '–'}
+      </span>
+    </div>
+    {!a && <div className="text-slate-500">no AI model loaded in this session</div>}
+    {a && <div className={a.model.startsWith('provisional') ? 'text-amber-300' : 'text-slate-400'}>model: {a.model} · {a.backend}</div>}
+    {a?.reasons.map((r, i) => (
+      <div key={i} className="truncate" title={r}>{a.codes[i]}: {r}</div>
+    ))}
+    {a && a.reasons.length === 0 && <div className="text-emerald-300">pattern like the clean training epochs</div>}
+  </div>
+);
+
 export const DetectionIndicatorsPanel: React.FC<Props> = ({
   data,
   row,
@@ -277,7 +295,8 @@ export const DetectionIndicatorsPanel: React.FC<Props> = ({
           <DetectorCard det="spoofing" data={data} row={row} />
         </div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <AICard a={row.ai} />
         <TrustBreakdown title="GNSS Trust" t={row.trust?.gnss} empty="not in this session (exported before trust scores)" />
         <TrustBreakdown title="Nav confidence (camera)" t={row.trust?.nav} empty="shown only while the camera carries the position" />
       </div>

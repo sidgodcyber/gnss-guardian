@@ -97,6 +97,7 @@ class LiveHub:
                     "hdop": v.get("hdop"), "cn0_mean": _r(f.get("cn0_mean"), 1)},
             "fused": v.get("fused"), "guidance": v.get("guidance"), "latch": v.get("latch"),
             "trust": v.get("trust"),
+            "ai": v.get("ai"),
             "jump_check": v.get("jump_check"),
             "home": v.get("home_status"), "home_keyframe": vis.get("home_kf"),
             "vision": {"fps": self.vision_fps(), "mode": vis.get("mode"), "aligned": vis.get("aligned"),

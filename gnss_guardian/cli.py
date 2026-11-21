@@ -11,6 +11,8 @@
     python -m gnss_guardian.cli calibrate --live --distance 5 [--camera picam]     (on the Pi, on the road)
     python -m gnss_guardian.cli field-demo --out session/NAME [--l86 /dev/serial0] [--port 8080]
     python -m gnss_guardian.cli outputs-test [--safe-action] [--uno /dev/ttyACM0]     (LED / Uno wiring check)
+    python -m gnss_guardian.cli ai-train FILE.nmea... --label "real L86, 40 min" [--first-min 40] [--out models/ai_model.json]
+    python -m gnss_guardian.cli ai-eval FILE.nmea... [--skip-min 40] [--model models/ai_model.json]
     python -m gnss_guardian.cli vision-bench [--video FILE] [--frames 300] [--scale 0.5] [--threads N]
 """
 from __future__ import annotations
@@ -329,6 +331,76 @@ def vision_bench(video, n, scale, threads, overlay):
         r = bench.run(cfg, frames, n, overlay=ov)
         click.echo(("with overlay    " if ov else "without overlay " if overlay else "") +
                    " | ".join(f"{k} {v}" for k, v in r.items()))
+
+
+
+
+def _read_lines(path):
+    """Lines of an NMEA file, or of a recording / live session folder's NMEA."""
+    from pathlib import Path
+
+    from gnss_guardian.run import resolve_recording
+    p = Path(path)
+    nmea = resolve_recording(p)[0] if p.is_dir() else p
+    return nmea.read_text(encoding="ascii", errors="replace").splitlines()
+
+
+@cli.command("ai-train")
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--label", required=True,
+              help='What it was trained on, shown with every AI output, e.g. "real L86, first 40 min of 60".')
+@click.option("--out", default="models/ai_model.json", show_default=True, type=click.Path(dir_okay=False))
+@click.option("--first-min", default=None, type=float, help="Only the first N minutes of each file.")
+@click.option("--skip-min", default=None, type=float, help="Skip the first N minutes of each file.")
+@click.option("--backend", default="auto", show_default=True, type=click.Choice(["auto", "iforest", "mahalanobis"]),
+              help="auto: IsolationForest when scikit-learn is installed, plus Mahalanobis (always).")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
+def ai_train(files, label, out, first_min, skip_min, backend, config_path):
+    """Train the AI second opinion on the clean epochs of real recordings (rule engine decides clean)."""
+    from gnss_guardian.detect import ai
+    cfg = load_config(config_path)
+    X = ai.collect([_read_lines(f) for f in files], cfg, first_s=first_min * 60 if first_min else None,
+                   skip_s=skip_min * 60 if skip_min else None)
+    try:
+        model = ai.train(X, cfg, label, sources=[str(f) for f in files], backend=backend)
+    except (ValueError, ImportError) as e:
+        raise click.ClickException(str(e)) from e
+    ai.save(model, out)
+    rej = model["trained"].get("iforest_rejected")
+    kinds = ("IsolationForest + Mahalanobis" if model["iforest"] else
+             f"Mahalanobis only (IsolationForest rejected: {rej})" if rej else "Mahalanobis only (no scikit-learn)")
+    click.echo(f"{out}: {kinds}, {len(X)} clean epochs, label: {label}")
+
+
+@cli.command("ai-eval")
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--model", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="Default: config ai.model_file.")
+@click.option("--first-min", default=None, type=float)
+@click.option("--skip-min", default=None, type=float, help="E.g. 40: judge only the held-out last part.")
+@click.option("--backend", default=None, type=click.Choice(["auto", "iforest", "mahalanobis"]))
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
+def ai_eval(files, model, first_min, skip_min, backend, config_path):
+    """AI false alarms (SUSPECT epochs / episodes) and its effect on spoofing alarms, per file."""
+    from gnss_guardian.detect import ai
+    cfg = load_config(config_path)
+    cfg["ai"]["enabled"] = True
+    if model:
+        cfg["ai"]["model_file"] = str(model)
+    if backend:
+        cfg["ai"]["backend"] = backend
+    for f in files:
+        try:
+            r = ai.evaluate(_read_lines(f), cfg, skip_s=skip_min * 60 if skip_min else None,
+                            first_s=first_min * 60 if first_min else None)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+        hours = r["epochs"] / 3600
+        rate = f"{r['ai_suspect_episodes'] / hours:.1f}/h" if hours else "-"
+        click.echo(f"{f}: {r['epochs']} epochs ({r['epochs'] / 60:.1f} min), AI SUSPECT {r['ai_suspect_epochs']} epochs "
+                   f"in {r['ai_suspect_episodes']} episodes ({rate}), score median {r['score_median']} p99 "
+                   f"{r['score_p99']} max {r['score_max']}; spoofing ALARM epochs {r['spoof_alarm_epochs']} "
+                   f"(rule only {r['spoof_alarm_epochs_rule_only']}) [{r['backend']}, {r['model']}]")
 
 
 def main():

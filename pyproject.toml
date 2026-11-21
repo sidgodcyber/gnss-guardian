@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+ai = ["scikit-learn>=1.3"]          # ai-train only (IsolationForest); run time needs numpy only
 
 [project.scripts]
 gnss-guardian = "gnss_guardian.cli:main"

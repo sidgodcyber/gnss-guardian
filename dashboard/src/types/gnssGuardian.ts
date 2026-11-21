@@ -102,6 +102,7 @@ export interface Row {
   guidance: Guidance | null;
   latch: Latch | null;
   trust?: Trust | null;             // display numbers (gnss_guardian/trust.py)
+  ai?: AIOpinion | null;            // AI second opinion (detect/ai.py), advisory; null when no model is loaded
   frame: number | null;
   injection?: Injection | null;     // demo spoof injection active at this row (live --demo-inject)
 }
@@ -126,6 +127,18 @@ export interface TrustScore {
 export interface Trust {
   gnss: TrustScore;
   nav: TrustScore | null;
+}
+
+// AI second opinion: anomaly score of the epoch against a model of clean epochs. Advisory: its level
+// is CLEAR or SUSPECT only; it can raise the spoofing score (corroboration), never lower it.
+export interface AIOpinion {
+  score: number;                    // 0-1
+  raw: number | null;
+  level: 'CLEAR' | 'SUSPECT';
+  reasons: string[];
+  codes: string[];                  // e.g. AI_CN0_STD_LOW
+  backend: 'iforest' | 'mahalanobis';
+  model: string;                    // what it was trained on, e.g. "provisional, not real L86 (...)"
 }
 
 // Demo spoof injection (software, before the detector): never a real attack.

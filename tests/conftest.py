@@ -34,6 +34,7 @@ def cfg():
     constellation), so tests that want the check pass an almanac and --sky explicitly (test_sky.py)."""
     c = load_config()
     c["detect"]["sky"]["almanac_file"] = None
+    c["ai"]["model_file"] = None                 # rule engine only, unless a test loads a model
     return c
 
 

@@ -39,6 +39,7 @@ body{display:flex;flex-direction:column;min-height:100vh;padding:12px 16px env(s
 <div id="state">CONNECTING</div><div id="sub"></div>
 <div id="trust"><div class="t"><div class="l">GNSS TRUST</div><div class="n" id="gt">&ndash;</div></div><div class="t" id="navbox" style="display:none"><div class="l">NAV CONFIDENCE (camera)</div><div class="n" id="nc">&ndash;</div></div></div>
 <div id="why"></div>
+<div id="ai" style="display:none;font-size:13px;color:#9fb0c8;padding:2px 12px"></div>
 <div id="inj">DEMO INJECTION ACTIVE &mdash; not a real attack</div>
 <div id="stale">STALE: no update for <span id="age">?</span> s &mdash; GNSS state unknown</div>
 <div id="main">
@@ -82,7 +83,10 @@ function why(t){if(!t)return '';const r=[...(t.cap?[t.cap]:[]),...t.penalties.sl
 function trust(v){const t=v.trust||{},g=t.gnss,n=t.nav;
   $('gt').textContent=g?g.score:'–';$('gt').style.color=g?BAND[g.band]:'#e8eef8';
   $('navbox').style.display=n?'block':'none';if(n){$('nc').textContent=n.score;$('nc').style.color=BAND[n.band]}
-  $('why').textContent=[why(g),n?'nav: '+why(n):''].filter(Boolean).join(' | ')}
+  $('why').textContent=[why(g),n?'nav: '+why(n):''].filter(Boolean).join(' | ');
+  const a=v.ai;$('ai').style.display=a?'block':'none';
+  if(a){$('ai').textContent=`AI second opinion (advisory, ${a.model}): ${a.level} ${a.score.toFixed(2)}`
+    +(a.reasons.length?' · '+a.reasons[0].replace('AI: ',''):'');$('ai').style.color=a.level==='SUSPECT'?'#ffb020':'#9fb0c8'}}
 function show(v){
   trust(v);
   const st=v.state||'WAITING',g=v.guidance,fu=v.fused,vis=v.vision||{};

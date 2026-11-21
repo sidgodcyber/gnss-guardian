@@ -56,6 +56,11 @@ class Pipeline:
             writer.set_home(self.home.home)
         self._sky_status = None
         self._sky_event()
+        ai = self.engine.ai
+        if ai is not None:
+            self.writer.event("ai_model", enabled=ai.enabled, detail=ai.status["reason"],
+                              backend=ai.status.get("backend"), label=ai.status.get("label"))
+            self.echo(f"AI second opinion {'ON' if ai.enabled else 'OFF'}: {ai.status['reason']}")
 
     def _sky_event(self, t_gnss=None) -> None:
         """sky_check event at start and whenever the check turns on/off (e.g. almanac too old for the data)."""

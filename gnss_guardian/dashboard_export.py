@@ -107,6 +107,7 @@ def _row(v: dict, t: float) -> dict:
         "vision": {k: vis.get(k) for k in VISION} if vis else None,
         "fused": v.get("fused"), "guidance": v.get("guidance"), "latch": v.get("latch"),
         "trust": v.get("trust"),
+        "ai": v.get("ai"),
         "frame": None,
     }
 
