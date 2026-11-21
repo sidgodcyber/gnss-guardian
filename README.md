@@ -364,6 +364,22 @@ TXD).
    Without it the run logs `sky_check` OFF and carries on.
 6. **Power.** 5 V 3 A USB-C; `vcgencmd get_throttled` must read `0x0` with the camera and L86 running.
 
+## GNSS Trust and Nav confidence
+
+Two numbers (0–100) per epoch, each listing what lowered it ([gnss_guardian/trust.py](gnss_guardian/trust.py),
+weights and caps in `trust:` of the config). They are display only: detection, the state machine and guidance
+never read them. Shown on the guidance page, the overlay (`TRUST`, `NAV`), `live.json`, the dashboard status
+cards and the dashboard's trust breakdown.
+
+- **GNSS Trust** (every epoch) = min(cap, 100 − penalties). Penalties: 60 × jamming score, 70 × spoofing score,
+  20 × AI score (when the AI is on), up to 10 for HDOP against its baseline, 100 without a fix. Caps: warm-up 50,
+  SUSPECT 60, an alarm and the camera navigation after it 10–20, the spoof latch 20, and 60 whenever GNSS is not
+  trusted. **≥ 80 only when GNSS is trusted** (tested on every simulator profile).
+- **Nav confidence** (only while the camera carries the position): penalties 30 × (1 − vision quality), 1.5 per
+  metre dead-reckoned since the last absolute fix (trusted GNSS, keyframe or home match; at most 40), 15 while the
+  camera heading is not aligned; capped at 20 when the camera track is lost (position held).
+  These weights are a first choice, not fitted to measured drift.
+
 ## Status LEDs and the safe-action output (Uno)
 
 Live mode drives four LEDs on the Pi ([gnss_guardian/outputs.py](gnss_guardian/outputs.py)); pins in `outputs.pins`
@@ -486,6 +502,7 @@ gnss_guardian/
   overlay.py               camera overlay frames (own thread), MJPEG source, overlay.mp4
   web/server.py            display server: overlay stream, /guide, /live.json, /inject/*   web/pages.py  guide page
   inject.py                demo spoof injection into the NMEA before the detector (field demo only)
+  trust.py                 GNSS Trust and Nav confidence (display numbers with their reasons)
   outputs.py               status LEDs (gpiozero, import-guarded) and the Uno safe-action heartbeat (demo only)
 firmware/uno_safe_action/  Arduino Uno sketch: relay + servo flag, 3 s heartbeat watchdog -> SAFE
 tools/fake_uno.py          the Uno sketch's logic in Python (socket://) for tests and laptop demos

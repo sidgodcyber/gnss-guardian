@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { DashboardFile, Detector, GuardianState, IndicatorDef, Level, Row } from '../types/gnssGuardian';
+import { DashboardFile, Detector, GuardianState, IndicatorDef, Level, Row, TrustScore } from '../types/gnssGuardian';
 import { fmt, fmtTime, stateLabel } from '../services/session';
 
 interface Props {
@@ -135,6 +135,33 @@ const DetectorCard: React.FC<{ det: Detector; data: DashboardFile; row: Row }> =
   );
 };
 
+const bandText = { high: 'text-emerald-300', medium: 'text-amber-300', low: 'text-red-300' } as const;
+
+// Why the number is what it is: the cap that set it (if any), then each penalty in points off 100.
+const TrustBreakdown: React.FC<{ title: string; t: TrustScore | null | undefined; empty: string }> = ({ title, t, empty }) => (
+  <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
+    <div className="flex items-baseline justify-between">
+      <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold font-sans">{title}</span>
+      <span className={`text-lg font-bold ${t ? bandText[t.band] : 'text-slate-500'}`}>{t ? t.score : '–'}</span>
+    </div>
+    {!t && <div className="text-slate-500">{empty}</div>}
+    {t?.cap && (
+      <div className="text-amber-300">
+        capped at {t.cap.value}: {t.cap.reason}
+      </div>
+    )}
+    {t?.penalties.map((p, i) => (
+      <div key={i} className="flex gap-2">
+        <span className="text-red-300 w-10 shrink-0 text-right">−{Math.round(p.points ?? 0)}</span>
+        <span className="truncate" title={p.reason}>
+          {p.code}: {p.reason}
+        </span>
+      </div>
+    ))}
+    {t && !t.cap && t.penalties.length === 0 && <div className="text-emerald-300">no penalties</div>}
+  </div>
+);
+
 export const DetectionIndicatorsPanel: React.FC<Props> = ({
   data,
   row,
@@ -249,6 +276,10 @@ export const DetectionIndicatorsPanel: React.FC<Props> = ({
         <div className="lg:col-span-5">
           <DetectorCard det="spoofing" data={data} row={row} />
         </div>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <TrustBreakdown title="GNSS Trust" t={row.trust?.gnss} empty="not in this session (exported before trust scores)" />
+        <TrustBreakdown title="Nav confidence (camera)" t={row.trust?.nav} empty="shown only while the camera carries the position" />
       </div>
     </div>
   );

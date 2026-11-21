@@ -68,6 +68,12 @@ def render(snap: dict | None, view: dict | None, track: dict, src_size=(640, 480
     src = {"gnss": "GNSS", "vision": "VISION", "vision_stale": "VISION (lost)", "last_fix": "LAST FIX"}.get(
         fu["source"], fu["source"]) if fu else "-"
     _text(img, f"pos: {src}", (150, 14), 0.42)
+    tr = v.get("trust") or {}
+    band = {"high": (80, 220, 80), "medium": (0, 190, 255), "low": (60, 60, 255)}
+    if tr.get("gnss"):
+        _text(img, f"TRUST {tr['gnss']['score']}", (W - 74, 14), 0.42, band[tr["gnss"]["band"]], 1)
+    if tr.get("nav"):
+        _text(img, f"NAV {tr['nav']['score']}", (120, 48), 0.42, band[tr["nav"]["band"]], 1)   # clear of line 2
     if fu:
         _text(img, f"home {fu['home_distance_m']:.1f} m @ {fu['home_bearing_deg']:.0f} deg   "
                    f"E {fu['e']:+.1f} N {fu['n']:+.1f}", (4, 29), 0.38)

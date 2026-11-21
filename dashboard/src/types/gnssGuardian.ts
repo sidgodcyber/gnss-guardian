@@ -101,8 +101,31 @@ export interface Row {
   fused: Fused | null;
   guidance: Guidance | null;
   latch: Latch | null;
+  trust?: Trust | null;             // display numbers (gnss_guardian/trust.py)
   frame: number | null;
   injection?: Injection | null;     // demo spoof injection active at this row (live --demo-inject)
+}
+
+// GNSS Trust (every epoch) and Nav confidence (only while the camera carries the position), 0-100,
+// each with the penalties (points off 100) and the cap that set it.
+export interface TrustItem {
+  code: string;
+  points?: number;
+  value?: number;
+  reason: string;
+}
+
+export interface TrustScore {
+  score: number;
+  band: 'high' | 'medium' | 'low';
+  penalties: TrustItem[];
+  cap: TrustItem | null;
+  since_fix_m?: number;
+}
+
+export interface Trust {
+  gnss: TrustScore;
+  nav: TrustScore | null;
 }
 
 // Demo spoof injection (software, before the detector): never a real attack.

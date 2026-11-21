@@ -19,6 +19,9 @@ body{display:flex;flex-direction:column;min-height:100vh;padding:12px 16px env(s
 #state{font-weight:800;font-size:clamp(22px,7vw,40px);letter-spacing:.02em;text-align:center;padding:10px;border-radius:12px;background:var(--card)}
 #sub{text-align:center;color:var(--dim);font-size:15px;margin:6px 0 0;min-height:1.3em}
 #inj{display:none;background:var(--bad);color:#fff;font-weight:800;text-align:center;padding:10px;border-radius:10px;margin-top:10px;font-size:18px}
+#trust{display:flex;gap:8px;margin-top:8px}#trust .t{flex:1;background:var(--card);border-radius:10px;padding:6px 10px;text-align:center}
+#trust .n{font-size:30px;font-weight:800;line-height:1.1}#trust .l{font-size:11px;color:var(--dim);letter-spacing:.06em}
+#why{color:var(--dim);font-size:12px;text-align:center;margin-top:4px;min-height:1.2em}
 #stale{display:none;background:#555;color:#fff;font-weight:700;text-align:center;padding:10px;border-radius:10px;margin-top:10px}
 #main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
 #arrow{width:min(70vw,52vh);height:min(70vw,52vh);transition:transform .6s ease}
@@ -34,6 +37,8 @@ body{display:flex;flex-direction:column;min-height:100vh;padding:12px 16px env(s
 #demo button.stop{background:var(--bad)}#demo small{color:var(--dim)}
 </style></head><body>
 <div id="state">CONNECTING</div><div id="sub"></div>
+<div id="trust"><div class="t"><div class="l">GNSS TRUST</div><div class="n" id="gt">&ndash;</div></div><div class="t" id="navbox" style="display:none"><div class="l">NAV CONFIDENCE (camera)</div><div class="n" id="nc">&ndash;</div></div></div>
+<div id="why"></div>
 <div id="inj">DEMO INJECTION ACTIVE &mdash; not a real attack</div>
 <div id="stale">STALE: no update for <span id="age">?</span> s &mdash; GNSS state unknown</div>
 <div id="main">
@@ -70,7 +75,14 @@ async function poll(){
   const age=(Date.now()-lastChange)/1000;
   $('stale').style.display=age>3?'block':'none';$('age').textContent=age.toFixed(0);
 }
+const BAND={high:'#3ccf6e',medium:'#ffb020',low:'#ff4d4f'};
+function why(t){if(!t)return '';const r=[...(t.cap?[t.cap]:[]),...t.penalties.slice().sort((a,b)=>b.points-a.points)];return r.slice(0,2).map(x=>x.points!=null?`-${Math.round(x.points)} ${x.reason}`:`max ${x.value}: ${x.reason}`).join(' · ')}
+function trust(v){const t=v.trust||{},g=t.gnss,n=t.nav;
+  $('gt').textContent=g?g.score:'–';$('gt').style.color=g?BAND[g.band]:'#e8eef8';
+  $('navbox').style.display=n?'block':'none';if(n){$('nc').textContent=n.score;$('nc').style.color=BAND[n.band]}
+  $('why').textContent=[why(g),n?'nav: '+why(n):''].filter(Boolean).join(' | ')}
 function show(v){
+  trust(v);
   const st=v.state||'WAITING',g=v.guidance,fu=v.fused,vis=v.vision||{};
   const stale=(Date.now()-lastChange)/1000>3;
   $('state').textContent=stale?'GNSS UNKNOWN':st.replace('_',' ');

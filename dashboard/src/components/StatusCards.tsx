@@ -1,5 +1,5 @@
 import React from 'react';
-import { Level, Row } from '../types/gnssGuardian';
+import { Level, Row, TrustScore } from '../types/gnssGuardian';
 import { FUSED_SOURCE, fmt, stateLabel } from '../services/session';
 
 const levelText: Record<Level, string> = {
@@ -19,6 +19,14 @@ const stateText: Record<string, string> = {
   'WARM-UP': 'text-slate-300',
 };
 
+const bandTone = { high: 'text-emerald-300', medium: 'text-amber-300', low: 'text-red-300' } as const;
+
+function topReason(t: TrustScore): string {
+  if (t.cap) return `max ${t.cap.value}: ${t.cap.reason}`;
+  const p = [...t.penalties].sort((a, b) => (b.points ?? 0) - (a.points ?? 0))[0];
+  return p ? `−${Math.round(p.points ?? 0)} ${p.reason}` : 'no penalties';
+}
+
 const Card: React.FC<{ label: string; value: React.ReactNode; sub?: React.ReactNode; tone?: string }> = ({
   label,
   value,
@@ -36,12 +44,24 @@ export const StatusCards: React.FC<{ row: Row; stale?: boolean }> = ({ row, stal
   const { gnss, jamming, spoofing, vision, fused } = row;
   const st = stateLabel(row.state);
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-3">
       {stale ? (
         <Card label="State" value="GNSS UNKNOWN" tone="text-slate-300" sub={`stale · last: ${st}`} />
       ) : (
         <Card label="State" value={st} tone={stateText[st]} sub={row.gnss_trusted ? 'GNSS trusted' : 'GNSS not trusted'} />
       )}
+      <Card
+        label="GNSS Trust"
+        value={stale || !row.trust ? '–' : row.trust.gnss.score}
+        tone={stale || !row.trust ? 'text-slate-300' : bandTone[row.trust.gnss.band]}
+        sub={row.trust ? topReason(row.trust.gnss) : undefined}
+      />
+      <Card
+        label="Nav confidence"
+        value={row.trust?.nav ? row.trust.nav.score : '–'}
+        tone={row.trust?.nav ? bandTone[row.trust.nav.band] : 'text-slate-500'}
+        sub={row.trust?.nav ? topReason(row.trust.nav) : 'only on camera navigation'}
+      />
       <Card
         label="GNSS fix"
         value={gnss.fix_valid ? 'valid' : 'no fix'}

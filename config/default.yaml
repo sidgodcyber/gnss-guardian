@@ -90,6 +90,24 @@ state:                           # Phase 3 state machine (gnss_guardian/state.py
                                  # Without a camera the detector's own latch (min_alarm_s) releases it.
                                  # Jamming releases when the detectors are CLEAR again.
 
+trust:                           # display numbers (gnss_guardian/trust.py); nothing in detection reads them
+  gnss:                          # GNSS Trust = min(cap, 100 - penalties), every epoch
+    weights: {jamming: 60, spoofing: 70, ai: 20, hdop: 10}   # points x score (0-1)
+    hdop_ratio: [1.5, 3.0]       # ramp on HDOP / baseline HDOP for the HDOP penalty
+    no_fix: 100                  # points when there is no valid fix
+    state_caps: {WARMING_UP: 50, SUSPECT: 60, JAMMED: 10, SPOOFED: 10, VISION_NAV: 20, RETURN_HOME: 20,
+                 HOME_REACHED: 20}
+    latch_cap: 20                # spoof latch held (GNSS untrusted until it agrees with the camera)
+    untrusted_cap: 60            # GNSS not trusted: never above this (>= 80 only when trusted)
+    bands: [80, 50]              # high >= 80, medium >= 50, else low
+  nav:                           # Nav confidence, only while the camera carries the position
+    quality_weight: 30           # points x (1 - vision quality)
+    drift_pts_per_m: 1.5         # points per metre dead-reckoned since the last absolute fix ...
+    drift_max: 40                # ... at most
+    unaligned: 15                # heading not aligned to the GNSS course yet
+    stale_cap: 20                # camera track lost (position held)
+    bands: [70, 40]
+
 guidance:                        # return-home guidance: advisory output only, never a command to the aircraft
   waypoint_reached_m: 1.5        # reverse breadcrumb path: a keyframe waypoint counts as passed within this
 

@@ -8,7 +8,7 @@ overlay thread (camera view) and the display server (overlay stream, guidance pa
 
 live.json (gnss-guardian-live/1, replaced atomically once per epoch): state, detector levels, scores
 and reasons, fix, satellites, HDOP, mean C/N0, guidance, vision rate and mode, home and home keyframe
-status, demo injection status, the dashboard row of this epoch, and the last 60 s of the fused track
+status, demo injection status, GNSS Trust and Nav confidence with their reasons, the dashboard row of this epoch, and the last 60 s of the fused track
 in metres from home. No latitude or longitude.
 """
 from __future__ import annotations
@@ -96,6 +96,7 @@ class LiveHub:
             "fix": {"valid": v.get("fix_valid"), "sats_used": f.get("n_used"), "sats_tracked": f.get("n_tracked"),
                     "hdop": v.get("hdop"), "cn0_mean": _r(f.get("cn0_mean"), 1)},
             "fused": v.get("fused"), "guidance": v.get("guidance"), "latch": v.get("latch"),
+            "trust": v.get("trust"),
             "jump_check": v.get("jump_check"),
             "home": v.get("home_status"), "home_keyframe": vis.get("home_kf"),
             "vision": {"fps": self.vision_fps(), "mode": vis.get("mode"), "aligned": vis.get("aligned"),

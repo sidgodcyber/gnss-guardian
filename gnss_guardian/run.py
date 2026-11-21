@@ -23,6 +23,7 @@ from gnss_guardian.io.epochs import EpochBuilder
 from gnss_guardian.io.nmea import split_prefix
 from gnss_guardian.session import SessionWriter
 from gnss_guardian.state import StateMachine
+from gnss_guardian.trust import NavConfidence, gnss_trust
 from gnss_guardian.vision.nav import VisionNav
 
 DETECTORS = ("jamming", "spoofing")
@@ -40,6 +41,7 @@ class Pipeline:
             self.engine.vision_track = vision.displacement     # 30 s GNSS-vs-camera displacement check
         self.state = StateMachine(cfg, camera=vision is not None)
         self.home = HomeSetter(cfg, home)
+        self.nav_conf = NavConfidence(cfg)
         self.writer = writer
         self.echo = echo or (lambda s: None)
         self.transitions: list[dict] = []
@@ -131,6 +133,7 @@ class Pipeline:
         if self.vision is not None:
             self._vision_step(t, v)
         self._state_step(t, v)
+        v["trust"] = {"gnss": gnss_trust(v, self.cfg), "nav": self.nav_conf.update(v)}   # display only
         self.writer.epoch(v)
         return v
 

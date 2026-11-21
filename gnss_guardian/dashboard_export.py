@@ -106,6 +106,7 @@ def _row(v: dict, t: float) -> dict:
         "features": {k: _r(f.get(k)) if not isinstance(f.get(k), bool) else f.get(k) for k in FEATURES},
         "vision": {k: vis.get(k) for k in VISION} if vis else None,
         "fused": v.get("fused"), "guidance": v.get("guidance"), "latch": v.get("latch"),
+        "trust": v.get("trust"),
         "frame": None,
     }
 
