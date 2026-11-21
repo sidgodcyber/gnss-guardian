@@ -25,3 +25,4 @@ recordings/
 **/frames.csv
 *.webm
 .env
+/eval/nmea/

@@ -288,6 +288,38 @@ track runs in an arbitrary direction, and one keyframe of a 12 m east walk sat 2
 
 Also measured on the bench: vision 15.7 fps at scale 1.0 and 30.0 fps at 0.5 (camera-capped) with GNSS live.
 
+## Evaluation harness (simulator)
+
+`gnss-guardian eval --runs 10 --out eval` ([gnss_guardian/evaluate.py](gnss_guardian/evaluate.py)) runs every
+profile 10 times (seeds 100–109; attack at 120 s; walking 20 × 10 m loop; almanac sky from
+`tests/fixtures/yuma_2026_295.alm`) plus a clean 30 min run, under five configurations, and writes
+`eval/results.csv` (one row per run, with a `source` column), `eval/summary.md` and `eval/eval.json`.
+**All of it is simulator data.** "Camera" here is the detector's velocity hook fed the true walk velocity plus
+0.2 m/s noise, not the vision pipeline. "AI" is the provisional model (not real L86). Cells: runs reaching ALARM
+from the expected detector, median latency to ALARM (min–max), simulated seconds.
+
+| Profile (10 runs each; clean: 1 × 30 min) | full | no-camera | no-AI | no-sky | rules-only |
+|---|---|---|---|---|---|
+| jam-sudden | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s |
+| jam-ramp | 10/10, 3 s | 10/10, 3 s | 10/10, 3 s | 10/10, 3 s | 10/10, 3 s |
+| spoof-jump | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s |
+| spoof-drift | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 1 s (0–1) | 0/10 (SUSPECT only) |
+| spoof-time | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s |
+| spoof-drift-natural | 10/10, 2.5 s (2–4) | 0/10 | 10/10, 2.5 s (2–4) | 10/10, 2.5 s (2–4) | 0/10 |
+| spoof-sky | 10/10, 0 s | 10/10, 0 s | 10/10, 0 s | 10/10, 2.5 s (2–4) | 0/10 |
+| clean | 0 false-alarm epochs | 0 false-alarm epochs | 0 false-alarm epochs | 0 false-alarm epochs | 0 false-alarm epochs |
+
+Zero SUSPECT/ALARM epochs before any onset in all 350 attack runs, and none in the clean runs; no alarm from the
+wrong detector.
+
+- **What each cross-check buys:** the camera alone catches the natural-C/N0 drift (the GNSS-only rules cannot);
+  the sky check catches the sky spoof without a camera; switching the AI off changes no cell (on the
+  simulator it agrees, it does not add detections).
+- **spoof-drift, rules only: SUSPECT, not ALARM.** Under the almanac sky the spoofer's satellites are the real
+  PRNs, so `newcomers` adds little (0.10) and `uniform_cn0` alone scores 0.57, below the 0.6 ALARM threshold.
+  The Phase 1 table's "1 s" for this profile used the simulator's synthetic sky, where the spoofer's satellites
+  are all newcomers. With the camera or the sky check on it is an ALARM within 1 s.
+
 ## Limits (read before quoting results)
 
 - **Vision numbers are from rendered ground, not footage.** Real ground adds lens distortion (the OV5647
@@ -524,18 +556,24 @@ L86, so it stays at its defaults: 9600 baud, 1 Hz, GPS + GLONASS (fixes on the `
 that as is. Find the port in Device Manager (Ports: "Arduino Uno (COMn)"), close the Arduino IDE serial
 monitor, then from the repo (with the venv):
 ```powershell
-.venv\Scripts\python toolsecord_nmea.py --port COM5 --baud 9600 --duration-min 60 --out testsixtureseal_l86_clean.nmea
+.venv\Scripts\python tools
+ecord_nmea.py --port COM5 --baud 9600 --duration-min 60 --out testsixtures
+eal_l86_clean.nmea
 ```
 Antenna with open sky, rig still, 60 min; the status line every 10 s must show `RMC A` and C/N0. Then:
 ```powershell
 # almanac within 14 days of the recording (download while online, README "GPS almanac")
-.venv\Scripts\python -m gnss_guardian.cli sky-report testsixtureseal_l86_clean.nmea --almanac datalmanac.yuma
+.venv\Scripts\python -m gnss_guardian.cli sky-report testsixtures
+eal_l86_clean.nmea --almanac datalmanac.yuma
 #   -> GPS az/el in GSV yes/no, sky error median/max, below-horizon satellites, SUSPECT/ALARM (false alarms) per detector
-.venv\Scripts\python -m gnss_guardian.cli ai-train testsixtureseal_l86_clean.nmea --first-min 40 --label "real L86, first 40 min of 60" --out modelsi_model.json
+.venv\Scripts\python -m gnss_guardian.cli ai-train testsixtures
+eal_l86_clean.nmea --first-min 40 --label "real L86, first 40 min of 60" --out modelsi_model.json
 #   -> outlier check on both models, which one runs, "model chosen on: real L86, ..."
-.venv\Scripts\python -m gnss_guardian.cli ai-eval testsixtureseal_l86_clean.nmea --skip-min 40
+.venv\Scripts\python -m gnss_guardian.cli ai-eval testsixtures
+eal_l86_clean.nmea --skip-min 40
 #   -> last 20 min: AI SUSPECT epochs and episodes per hour (the AI false alarms), spoofing ALARM epochs with/without AI
-.venv\Scripts\python -m gnss_guardian.cli replay testsixtureseal_l86_clean.nmea --out session\l86_clean
+.venv\Scripts\python -m gnss_guardian.cli replay testsixtures
+eal_l86_clean.nmea --out session\l86_clean
 #   -> full rule-engine run: alarm epochs in the summary, dashboard file for the session
 ```
 (Tested on a simulator file in exactly that default format: `tests/test_bridge_recording.py`.)
@@ -573,6 +611,7 @@ gnss_guardian/
   overlay.py               camera overlay frames (own thread), MJPEG source, overlay.mp4
   web/server.py            display server: overlay stream, /guide, /live.json, /inject/*   web/pages.py  guide page
   detect/ai.py             AI second opinion: features, IsolationForest/Mahalanobis (JSON, numpy at run time)
+  evaluate.py              gnss-guardian eval: simulator profiles x ablation -> results.csv, summary.md
   inject.py                demo spoof injection into the NMEA before the detector: jump, drift, sky (field demo only)
   trust.py                 GNSS Trust and Nav confidence (display numbers with their reasons)
   outputs.py               status LEDs (gpiozero, import-guarded) and the Uno safe-action heartbeat (demo only)

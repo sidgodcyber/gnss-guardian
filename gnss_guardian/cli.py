@@ -12,6 +12,7 @@
     python -m gnss_guardian.cli field-demo --out session/NAME [--l86 /dev/serial0] [--port 8080]
     python -m gnss_guardian.cli outputs-test [--safe-action] [--uno /dev/ttyACM0]     (LED / Uno wiring check)
     python -m gnss_guardian.cli ai-train FILE.nmea... --label "real L86, 40 min" [--first-min 40] [--out models/ai_model.json]
+    python -m gnss_guardian.cli eval [--runs 10] [--out eval]      (simulator: profiles x ablation table)
     python -m gnss_guardian.cli sky-report FILE.nmea... [--almanac data/almanac.yuma]
     python -m gnss_guardian.cli ai-eval FILE.nmea... [--skip-min 40] [--model models/ai_model.json]
     python -m gnss_guardian.cli vision-bench [--video FILE] [--frames 300] [--scale 0.5] [--threads N]
@@ -429,6 +430,21 @@ def sky_report(files, almanac, config_path):
         for k in ("spoofing", "jamming"):
             click.echo(f"  {k}: SUSPECT {d[k]['SUSPECT']} epochs, ALARM {d[k]['ALARM']} epochs, "
                        f"{d[k]['episodes']} episodes")
+
+
+@cli.command("eval")
+@click.option("--runs", default=10, show_default=True, type=click.IntRange(1, 100), help="Runs per attack profile.")
+@click.option("--out", default="eval", show_default=True, type=click.Path(file_okay=False))
+@click.option("--profile", "profiles", multiple=True, help="Only these profiles (default: all).")
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False))
+def eval_cmd(runs, out, profiles, config_path):
+    """Simulator evaluation: every profile x {full, no-camera, no-AI, no-sky, rules-only} -> results.csv, summary.md."""
+    from pathlib import Path
+
+    from gnss_guardian import evaluate
+    cfg = load_config(config_path)
+    evaluate.evaluate(cfg, runs, Path(out), profiles=list(profiles) or None, echo=click.echo)
+    click.echo((Path(out) / "summary.md").read_text(encoding="utf-8"))
 
 
 def main():
