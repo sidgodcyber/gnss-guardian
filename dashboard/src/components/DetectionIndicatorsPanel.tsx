@@ -14,7 +14,7 @@ interface Props {
   onRestart: () => void;
 }
 
-const markerColor = (s: GuardianState | null) =>
+export const markerColor = (s: GuardianState | null) =>
   s === 'GNSS_OK'
     ? 'bg-emerald-500 border-emerald-300'
     : s === 'SUSPECT'
@@ -36,7 +36,7 @@ const levelStyle: Record<Level, string> = {
 };
 
 // Raw value the detector ramps for each indicator (same inputs as gnss_guardian/detect/*.py).
-function featureValue(det: Detector, ind: IndicatorDef, row: Row): string {
+export function featureValue(det: Detector, ind: IndicatorDef, row: Row): string {
   const f = row.features;
   const num = (k: string) => (typeof f[k] === 'number' ? (f[k] as number) : null);
   if (ind.key === 'fix_lost') return f.fix_lost ? 'yes' : 'no';
@@ -51,7 +51,12 @@ function featureValue(det: Detector, ind: IndicatorDef, row: Row): string {
   return v === null ? '–' : `${v.toFixed(ind.unit === 'fraction' ? 2 : 1)}${ind.unit && ind.unit !== 'fraction' ? ` ${ind.unit}` : ''}`;
 }
 
-const ScoreStrip: React.FC<{ data: DashboardFile; t: number; onSeek: (t: number) => void }> = ({ data, t, onSeek }) => {
+export const ScoreStrip: React.FC<{ data: DashboardFile; t: number; onSeek: (t: number) => void; className?: string }> = ({
+  data,
+  t,
+  onSeek,
+  className = 'h-16',
+}) => {
   const W = 1000;
   const H = 70;
   const dur = Math.max(1, data.meta.duration_s);
@@ -64,7 +69,7 @@ const ScoreStrip: React.FC<{ data: DashboardFile; t: number; onSeek: (t: number)
     <svg
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
-      className="w-full h-16 bg-slate-950 rounded border border-slate-800 cursor-pointer"
+      className={`w-full ${className} bg-slate-950 rounded border border-slate-800 cursor-pointer`}
       onClick={(e) => {
         const r = e.currentTarget.getBoundingClientRect();
         onSeek(((e.clientX - r.left) / r.width) * dur);
@@ -180,7 +185,8 @@ const AICard: React.FC<{ a: AIOpinion | null | undefined }> = ({ a }) => (
   </div>
 );
 
-export const DetectionIndicatorsPanel: React.FC<Props> = ({
+// PLAY / RESTART / speed, time, and the scrubber with the state-transition markers (both views).
+export const ReplayControls: React.FC<Props> = ({
   data,
   row,
   currentTimeSec,
@@ -193,11 +199,8 @@ export const DetectionIndicatorsPanel: React.FC<Props> = ({
 }) => {
   const dur = Math.max(0.001, data.meta.duration_s);
   const markers = useMemo(() => data.transitions.filter((tr) => tr.state !== null && tr.state !== 'WARMING_UP'), [data]);
-  const h = data.config.hysteresis;
-
   return (
-    <div className="bg-slate-900/90 rounded-xl border border-slate-800 p-4 shadow-xl flex flex-col gap-4">
-      <div className="bg-slate-950/80 rounded-lg p-3 border border-slate-800/90 flex flex-col gap-2.5">
+      <>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button
@@ -264,6 +267,37 @@ export const DetectionIndicatorsPanel: React.FC<Props> = ({
           </div>
         </div>
 
+      </>
+  );
+};
+
+export const DetectionIndicatorsPanel: React.FC<Props> = ({
+  data,
+  row,
+  currentTimeSec,
+  isPlaying,
+  playbackSpeed,
+  onSeek,
+  onTogglePlay,
+  onSetSpeed,
+  onRestart,
+}) => {
+  const h = data.config.hysteresis;
+
+  return (
+    <div className="bg-slate-900/90 rounded-xl border border-slate-800 p-4 shadow-xl flex flex-col gap-4">
+      <div className="bg-slate-950/80 rounded-lg p-3 border border-slate-800/90 flex flex-col gap-2.5">
+        <ReplayControls
+          data={data}
+          row={row}
+          currentTimeSec={currentTimeSec}
+          isPlaying={isPlaying}
+          playbackSpeed={playbackSpeed}
+          onSeek={onSeek}
+          onTogglePlay={onTogglePlay}
+          onSetSpeed={onSetSpeed}
+          onRestart={onRestart}
+        />
         <ScoreStrip data={data} t={currentTimeSec} onSeek={onSeek} />
         <div className="flex flex-wrap gap-4 text-[10px] font-mono text-slate-500">
           <span className="text-orange-400">— jamming score</span>

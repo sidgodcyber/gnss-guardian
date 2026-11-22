@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DashboardFile, LoadedSession, injectionLabel } from './types/gnssGuardian';
 import { listServerSessions, loadPickedFolder, loadServerSession, rowIndexAt } from './services/session';
 import { STALE_S, appendLive, emptyLiveFile, fetchLive, liveBase } from './services/live';
-import { AvionicsHeader } from './components/AvionicsHeader';
+import { AvionicsHeader, View } from './components/AvionicsHeader';
+import { DemoView } from './components/DemoView';
 import { StatusCards } from './components/StatusCards';
 import { TacticalMap } from './components/TacticalMap';
 import { DownCamView } from './components/DownCamView';
@@ -13,6 +14,19 @@ import { IncidentLogView } from './components/IncidentLogView';
 type Tab = 'replay' | 'logs';
 
 const params = new URLSearchParams(window.location.search);
+const VIEW_KEY = 'gnss-guardian.view';
+
+function initialView(): View {
+  const q = params.get('view');
+  if (q === 'demo' || q === 'details') return q;
+  try {
+    const v = window.localStorage.getItem(VIEW_KEY);
+    if (v === 'demo' || v === 'details') return v;
+  } catch {
+    /* storage blocked: default */
+  }
+  return 'demo';
+}
 
 export default function App() {
   const [serverDir, setServerDir] = useState<string | null>(null);
@@ -27,6 +41,15 @@ export default function App() {
   const [liveAge, setLiveAge] = useState(0);
   const lastLiveChange = useRef(0);
   const liveFile = useRef<DashboardFile | null>(null);
+  const [view, setViewState] = useState<View>(initialView);
+  const setView = useCallback((v: View) => {
+    setViewState(v);
+    try {
+      window.localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* storage blocked: still switches for this visit */
+    }
+  }, []);
 
   const open = useCallback(async (load: () => Promise<LoadedSession>, startAt = 0) => {
     try {
@@ -126,9 +149,12 @@ export default function App() {
   const history = useMemo(() => rows.slice(0, idx + 1), [rows, idx]);
 
   const seek = (t: number) => setCurrentTimeSec(Math.max(0, Math.min(t, duration)));
+  const togglePlay = () => {
+    if (!isPlaying && currentTimeSec >= duration) setCurrentTimeSec(0);
+    setIsPlaying(!isPlaying);
+  };
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+  const header = (
       <AvionicsHeader
         currentState={row?.state ?? null}
         hasSession={!!row}
@@ -150,7 +176,56 @@ export default function App() {
           setLiveAddr(addr);
         }}
         onDisconnectLive={() => setLiveAddr(null)}
+        view={view}
+        setView={setView}
       />
+  );
+
+  if (view === 'demo') {
+    return (
+      <div className="h-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden">
+        {header}
+        {error && (
+          <div className="shrink-0 mx-2 mt-2 px-3 py-1.5 rounded-lg border border-red-500/60 bg-red-950/60 text-xs text-red-200">{error}</div>
+        )}
+        {stale && (
+          <div className="shrink-0 mx-2 mt-2 px-3 py-1.5 rounded-lg border border-slate-400 bg-slate-800 text-sm font-bold text-slate-100">
+            STALE: no new epoch from the Pi for {liveAge.toFixed(0)} s. GNSS state unknown.
+          </div>
+        )}
+        {row?.injection && (
+          <div className="shrink-0 mx-2 mt-2 px-3 py-1.5 rounded-lg border border-amber-400 bg-amber-500/20 text-sm font-bold text-amber-200">
+            DEMO INJECTION ACTIVE: {injectionLabel(row.injection)}
+            <span className="font-normal text-amber-200/80"> · software, before the detector · not a real attack</span>
+          </div>
+        )}
+        {!session || !row ? (
+          <div className="p-4"><EmptyState serverDir={serverDir} /></div>
+        ) : (
+          <DemoView
+            data={session.data}
+            row={row}
+            history={history}
+            currentTimeSec={currentTimeSec}
+            isPlaying={isPlaying}
+            playbackSpeed={playbackSpeed}
+            isLive={isLive}
+            stale={stale}
+            videoUrl={session.videoUrl}
+            liveStreamUrl={session.liveBase ? `${session.liveBase}/` : undefined}
+            onSeek={seek}
+            onTogglePlay={togglePlay}
+            onSetSpeed={setPlaybackSpeed}
+            onRestart={() => setCurrentTimeSec(0)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {header}
 
       <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full flex flex-col gap-5">
         {error && (
@@ -198,10 +273,7 @@ export default function App() {
                   isPlaying={isPlaying}
                   playbackSpeed={playbackSpeed}
                   onSeek={seek}
-                  onTogglePlay={() => {
-                    if (!isPlaying && currentTimeSec >= duration) setCurrentTimeSec(0);
-                    setIsPlaying(!isPlaying);
-                  }}
+                  onTogglePlay={togglePlay}
                   onSetSpeed={setPlaybackSpeed}
                   onRestart={() => setCurrentTimeSec(0)}
                 />

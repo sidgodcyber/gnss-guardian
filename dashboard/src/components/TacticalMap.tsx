@@ -7,11 +7,15 @@ interface TacticalMapProps {
   row: Row;
   history: Row[];
   currentTimeSec: number;
+  // Demo view: fit to where the rig really was (camera track, keyframes, home, routes and GNSS only while
+  // trusted), so a spoofed GNSS position hundreds of metres away does not shrink the rig's track to a dot;
+  // an edge pointer shows where the untrusted GNSS position went. Compact legend.
+  focus?: boolean;
 }
 
 const GRID_STEPS = [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
 
-export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, currentTimeSec }) => {
+export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, currentTimeSec, focus = false }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [zoomFactor, setZoomFactor] = useState(1);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -21,7 +25,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     const xs = [0];
     const ys = [0];
     for (const r of data.timeline) {
-      if (r.gnss.e != null && r.gnss.n != null) {
+      if (r.gnss.e != null && r.gnss.n != null && (!focus || r.gnss_trusted)) {
         xs.push(r.gnss.e);
         ys.push(r.gnss.n);
       }
@@ -42,7 +46,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     }
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: Math.max(10, maxX - minX), h: Math.max(10, maxY - minY) };
-  }, [data]);
+  }, [data, focus]);
 
   useEffect(() => {
     const c = canvasRef.current;
@@ -159,6 +163,36 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     marker(row.gnss.e, row.gnss.n, '#10b981');
     marker(row.vision?.e ?? null, row.vision?.n ?? null, '#0ea5e9');
 
+    // GNSS position outside the view (a spoof that jumped away): pointer on the edge with its distance
+    if (row.gnss.e != null && row.gnss.n != null) {
+      const g = toPx(row.gnss.e, row.gnss.n);
+      const m = 14;
+      if (g.x < m || g.x > W - m || g.y < m || g.y > H - m) {
+        const ref = row.fused ?? (row.vision?.e != null && row.vision?.n != null ? { e: row.vision.e, n: row.vision.n } : { e: 0, n: 0 });
+        const c = toPx(ref.e, ref.n);
+        const dx = g.x - c.x, dy = g.y - c.y;
+        const k = Math.min(Math.abs((dx > 0 ? W - m - c.x : m - c.x) / (dx || 1e-9)), Math.abs((dy > 0 ? H - m - c.y : m - c.y) / (dy || 1e-9)));
+        const ex = c.x + dx * k, ey = c.y + dy * k;
+        const a = Math.atan2(dy, dx);
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        ctx.moveTo(ex + 10 * Math.cos(a), ey + 10 * Math.sin(a));
+        ctx.lineTo(ex + 9 * Math.cos(a + 2.5), ey + 9 * Math.sin(a + 2.5));
+        ctx.lineTo(ex + 9 * Math.cos(a - 2.5), ey + 9 * Math.sin(a - 2.5));
+        ctx.fill();
+        const dist = Math.hypot(row.gnss.e - ref.e, row.gnss.n - ref.n);
+        const label = `GNSS ${dist.toFixed(0)} m`;
+        ctx.font = 'bold 12px monospace';
+        const tw = ctx.measureText(label).width;
+        const lx = Math.min(Math.max(ex - tw / 2, 4), W - tw - 4);
+        const ly = Math.min(Math.max(ey + (ey > H / 2 ? -16 : 22), 14), H - 6);
+        ctx.fillStyle = 'rgba(2,6,23,0.85)';
+        ctx.fillRect(lx - 3, ly - 12, tw + 6, 16);
+        ctx.fillStyle = '#34d399';
+        ctx.fillText(label, lx, ly);
+      }
+    }
+
     // fused position (ring) and, while guiding, an arrow to the next waypoint
     if (row.fused) {
       const q = toPx(row.fused.e, row.fused.n);
@@ -181,7 +215,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
         ctx.stroke();
       }
     }
-  }, [data, row, history, currentTimeSec, size, scale, extent]);
+  }, [data, row, history, currentTimeSec, size, scale, extent]);   // focus is in extent
 
   const v = row.vision;
   const sep =
@@ -213,6 +247,15 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
       <div className="relative flex-1">
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
+        {focus ? (
+          <div className="absolute bottom-2 left-2 flex flex-wrap gap-x-3 gap-y-0.5 px-2 py-1 bg-slate-950/90 border border-slate-800 rounded text-[11px] font-mono text-slate-300">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-emerald-500" />GNSS</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-sky-500" />camera</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full border-2 border-fuchsia-200" />fused</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 border-t border-dashed border-violet-400" />route home</span>
+            <span>H home</span>
+          </div>
+        ) : (
         <div className="absolute bottom-3 left-3 flex flex-col gap-1 p-2 bg-slate-950/90 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300">
           <div className="flex items-center gap-2"><span className="w-3 h-0.5 bg-emerald-500" />GNSS track</div>
           <div className="flex items-center gap-2"><span className="w-3 h-0.5 bg-sky-500" />vision track</div>
@@ -221,8 +264,9 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
           <div className="flex items-center gap-2"><span className="w-2 h-2 bg-sky-400" />keyframe ({data.keyframes.filter((k) => k.t !== null && k.t <= currentTimeSec).length})</div>
           <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full border border-slate-200 text-[7px] leading-3 text-center">H</span>home (0, 0)</div>
         </div>
+        )}
 
-        <div className="absolute top-3 right-3 p-2.5 bg-slate-950/90 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300 space-y-1">
+        <div className={`absolute ${focus ? 'bottom-2 right-2' : 'top-3 right-3'} p-2.5 bg-slate-950/90 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300 space-y-1`}>
           <div>
             GNSS <span className="text-emerald-400">{fmt(row.gnss.e, 1)}, {fmt(row.gnss.n, 1)} m</span>
           </div>
