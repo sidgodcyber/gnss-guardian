@@ -148,6 +148,18 @@ function dbClear(db: IDBDatabase | null) {
 }
 
 // ---------------------------------------------------------------- component
+// Plain-language reason for a getUserMedia failure, with what to do about it.
+function cameraError(e: unknown): string {
+  const name = e instanceof DOMException ? e.name : '';
+  if (name === 'NotReadableError' || name === 'TrackStartError' || /in use|could not start/i.test(String(e)))
+    return 'The camera is in use by another app or tab. Close WhatsApp / Zoom / Teams / Meet, the Windows Camera app and any other tab using the camera, then press Retry.';
+  if (name === 'NotAllowedError' || name === 'SecurityError')
+    return 'Camera permission is blocked. Click the camera icon in the address bar, choose Allow, then press Retry.';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError')
+    return 'No camera found. Plug one in (or enable it in Windows Settings > Privacy > Camera), then press Retry.';
+  return `The camera did not start: ${e instanceof Error ? e.message : String(e)}`;
+}
+
 export const WebcamVO: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewRef = useRef<HTMLCanvasElement | null>(null);
@@ -156,6 +168,7 @@ export const WebcamVO: React.FC = () => {
   const keysRef = useRef<Key[]>([]);
   const [keys, setKeys] = useState<Key[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);                     // Retry re-runs the camera effect
   const [stats, setStats] = useState({ tracked: 0, inliers: 0, flow: 0, fps: 0 });
   const [match, setMatch] = useState<{ id: number; score: number } | null>(null);
   const saveNow = useRef(false);
@@ -310,15 +323,25 @@ export const WebcamVO: React.FC = () => {
 
     (async () => {
       try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('this browser gives no camera access here (needs localhost or https)');
-        stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
-        if (stop) return;
+        if (!navigator.mediaDevices?.getUserMedia)
+          throw new Error('this page has no camera access: open it as http://127.0.0.1:3000 or localhost (or https)');
+        setError(null);
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+        } catch (first) {
+          if (first instanceof DOMException && first.name === 'NotAllowedError') throw first;
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });   // any resolution
+        }
+        if (stop) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         const v = videoRef.current!;
         v.srcObject = stream;
         await v.play();
         raf = requestAnimationFrame(step);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (!stop) setError(cameraError(e));
       }
     })();
     return () => {
@@ -326,7 +349,7 @@ export const WebcamVO: React.FC = () => {
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [attempt]);
 
   const download = useCallback((k: Key) => {
     const a = document.createElement('a');
@@ -348,8 +371,11 @@ export const WebcamVO: React.FC = () => {
       <video ref={videoRef} muted playsInline className="absolute w-px h-px opacity-0 pointer-events-none" />
       <canvas ref={viewRef} className="absolute inset-0 w-full h-full" />
       {error && (
-        <div className="absolute inset-x-3 top-3 p-2 text-xs rounded bg-red-950/90 border border-red-500/60 text-red-200">
-          camera: {error}
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 p-6 text-center bg-black/90">
+          <div className="text-sm font-semibold text-red-300">Camera not available</div>
+          <div className="max-w-xs text-xs leading-relaxed text-slate-300">{error}</div>
+          <button onClick={() => setAttempt((a) => a + 1)}
+            className="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs font-semibold">Retry</button>
         </div>
       )}
       <div className="absolute top-3 left-3 p-2.5 bg-slate-950/85 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300 space-y-1">
