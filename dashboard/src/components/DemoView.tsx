@@ -27,7 +27,7 @@ interface Props {
   onRestart: () => void;
 }
 
-const trustColour = (s: number) => (s >= 80 ? '#34d399' : s >= 50 ? '#fbbf24' : '#f87171');
+const trustColour = (s: number) => (s >= 80 ? '#059669' : s >= 50 ? '#d97706' : '#dc2626');
 const trustText = (s: number) => (s >= 80 ? 'text-emerald-300' : s >= 50 ? 'text-amber-300' : 'text-red-300');
 
 const stateTone: Record<string, string> = {
@@ -76,7 +76,7 @@ const Ring: React.FC<{ score: number; size: number }> = ({ score, size }) => {
   const c = 2 * Math.PI * r;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0" aria-hidden>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1e293b" strokeWidth={9} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth={9} />
       <circle
         cx={size / 2}
         cy={size / 2}

@@ -76,11 +76,11 @@ export const ScoreStrip: React.FC<{ data: DashboardFile; t: number; onSeek: (t: 
       }}
     >
       {[h.suspect_on, h.alarm_on].map((y, i) => (
-        <line key={i} x1={0} x2={W} y1={H - y * H} y2={H - y * H} stroke={i ? '#7f1d1d' : '#78350f'} strokeDasharray="6 6" />
+        <line key={i} x1={0} x2={W} y1={H - y * H} y2={H - y * H} stroke={i ? '#dc2626' : '#d97706'} strokeDasharray="6 6" />
       ))}
-      <path d={path('jamming')} fill="none" stroke="#f97316" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-      <path d={path('spoofing')} fill="none" stroke="#a78bfa" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-      <line x1={(t / dur) * W} x2={(t / dur) * W} y1={0} y2={H} stroke="#e2e8f0" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      <path d={path('jamming')} fill="none" stroke="#ea580c" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      <path d={path('spoofing')} fill="none" stroke="#7c3aed" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      <line x1={(t / dur) * W} x2={(t / dur) * W} y1={0} y2={H} stroke="#334155" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 };
