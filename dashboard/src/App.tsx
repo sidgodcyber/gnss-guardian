@@ -10,15 +10,11 @@ import { DownCamView } from './components/DownCamView';
 import { DetectionIndicatorsPanel } from './components/DetectionIndicatorsPanel';
 import { SensorFusionView } from './components/SensorFusionView';
 import { IncidentLogView } from './components/IncidentLogView';
-import Landing from './landing/Landing';
 
 type Tab = 'replay' | 'logs';
 
 const params = new URLSearchParams(window.location.search);
 const VIEW_KEY = 'gnss-guardian.view';
-// The project landing sits above the dashboard on the same page; ?landing=off skips it (e.g. a live demo screen).
-const SHOW_LANDING = params.get('landing') !== 'off';
-const openDashboard = () => document.getElementById('dashboard')?.scrollIntoView({ behavior: 'smooth' });
 
 function initialView(): View {
   const q = params.get('view');
@@ -187,9 +183,7 @@ export default function App() {
 
   if (view === 'demo') {
     return (
-      <>
-      {SHOW_LANDING && <Landing onOpenDashboard={openDashboard} />}
-      <div id="dashboard" className="h-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden">
+      <div className="h-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden">
         {header}
         {error && (
           <div className="shrink-0 mx-2 mt-2 px-3 py-1.5 rounded-lg border border-red-500/60 bg-red-950/60 text-xs text-red-200">{error}</div>
@@ -226,14 +220,11 @@ export default function App() {
           />
         )}
       </div>
-      </>
     );
   }
 
   return (
-    <>
-    {SHOW_LANDING && <Landing onOpenDashboard={openDashboard} />}
-    <div id="dashboard" className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {header}
 
       <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full flex flex-col gap-5">
@@ -319,7 +310,6 @@ export default function App() {
         GNSS Guardian viewer · replay files or a live Pi on the LAN · positions in metres from the home point
       </footer>
     </div>
-    </>
   );
 }
 

@@ -3,7 +3,7 @@ import { DashboardFile, Detector, Row, TrustScore } from '../types/gnssGuardian'
 import { fmt, fmtTime, lastTransitionAt, stateLabel } from '../services/session';
 import { ReplayControls, ScoreStrip, featureValue } from './DetectionIndicatorsPanel';
 import { TacticalMap } from './TacticalMap';
-import { DownCamView, probeClip } from './DownCamView';
+import { DownCamView } from './DownCamView';
 
 // Single-screen view for judging: everything that matters on one 1920x1080 (or 1366x768) screen.
 // Left: GNSS Trust, Nav confidence (only while the camera carries the position), state, AI.
@@ -76,7 +76,7 @@ const Ring: React.FC<{ score: number; size: number }> = ({ score, size }) => {
   const c = 2 * Math.PI * r;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0" aria-hidden>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--gg-ring-track)" strokeWidth={9} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth={9} />
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -217,11 +217,7 @@ const FiringIndicators: React.FC<{ data: DashboardFile; row: Row }> = ({ data, r
 
 export const DemoView: React.FC<Props> = (p) => {
   const { data, row, history, currentTimeSec, isLive, stale, videoUrl, liveStreamUrl } = p;
-  const [clip, setClip] = useState(false);
-  useEffect(() => {
-    probeClip().then((url) => setClip(!!url));
-  }, []);
-  const hasCamera = clip || !!videoUrl || (isLive && data.timeline.some((r) => r.vision));
+  const hasCamera = !!videoUrl || (isLive && data.timeline.some((r) => r.vision));
   const h = data.config.hysteresis;
   const short = useShort();
   return (

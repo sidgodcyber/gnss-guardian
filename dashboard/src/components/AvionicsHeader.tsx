@@ -1,6 +1,5 @@
 import React, { useRef, useState } from 'react';
 import { GuardianState } from '../types/gnssGuardian';
-import { useTheme } from '../services/theme';
 
 interface AvionicsHeaderProps {
   currentState: GuardianState | null;
@@ -73,24 +72,6 @@ export const StateChain: React.FC<{ currentState: GuardianState | null; hasSessi
           </React.Fragment>
         );
       })}
-    </div>
-  );
-};
-
-const ThemeToggle: React.FC = () => {
-  const [theme, setTheme] = useTheme();
-  return (
-    <div className="flex items-center bg-slate-900 rounded-md p-0.5 border border-slate-700 text-xs shrink-0" role="group" aria-label="Theme">
-      {(['light', 'dark'] as const).map((t) => (
-        <button
-          key={t}
-          onClick={() => setTheme(t)}
-          aria-pressed={theme === t}
-          className={`px-2.5 py-1 rounded font-semibold ${theme === t ? 'bg-slate-700 text-slate-50' : 'text-slate-400 hover:text-slate-200'}`}
-        >
-          {t === 'light' ? 'Light' : 'Dark'}
-        </button>
-      ))}
     </div>
   );
 };
@@ -202,7 +183,6 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
           >
             Open…
           </button>
-          <ThemeToggle />
           <ViewToggle view={view} setView={setView} />
         </div>
       </header>
@@ -286,10 +266,7 @@ export const AvionicsHeader: React.FC<AvionicsHeaderProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-          <ViewToggle view={view} setView={setView} />
-        </div>
+        <ViewToggle view={view} setView={setView} />
 
         <nav className="hidden lg:flex items-center gap-4 text-xs font-medium text-slate-400">
           {navItems.map((item) => (
