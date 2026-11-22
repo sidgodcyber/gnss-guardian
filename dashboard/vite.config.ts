@@ -72,6 +72,17 @@ function sessionFolders(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), sessionFolders()],
+  // shadcn-style imports: @/components/ui/... -> src/components/ui/...
+  resolve: { alias: { '@': path.resolve(import.meta.dirname, 'src') } },
+  // Two pages: the dashboard (index.html) and the project landing page (landing.html).
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        landing: path.resolve(import.meta.dirname, 'landing.html'),
+      },
+    },
+  },
   server: { host: '127.0.0.1', port: 3000 },
   preview: { host: '127.0.0.1', port: 3000 },
 });

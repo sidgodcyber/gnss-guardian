@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+/* Landing page only: its own stylesheet, so the dashboard's light-theme palette remap does not apply here. */
+html,
+body {
+  margin: 0;
+  background: #030307;
+  color: #e8e6e3;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Low-resolution buffer scaled up with hard pixels: the grainy, low-quality film look. */
+.lofi canvas {
+  image-rendering: pixelated;
+}
