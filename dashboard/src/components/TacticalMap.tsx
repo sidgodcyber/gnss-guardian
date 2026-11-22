@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DashboardFile, Row } from '../types/gnssGuardian';
 import { fmt, lastRouteAt } from '../services/session';
+import { cssVar, useTheme } from '../services/theme';
 
 interface TacticalMapProps {
   data: DashboardFile;
@@ -19,6 +20,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [zoomFactor, setZoomFactor] = useState(1);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const [theme] = useTheme();
 
   // Extent of the whole session (both tracks, keyframes, home) so the view does not jump while playing.
   const extent = useMemo(() => {
@@ -70,7 +72,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     const toPx = (e: number, n: number) => ({ x: W / 2 + (e - extent.cx) * scale, y: H / 2 - (n - extent.cy) * scale });
     const toM = (x: number, y: number) => ({ e: extent.cx + (x - W / 2) / scale, n: extent.cy - (y - H / 2) / scale });
 
-    ctx.fillStyle = '#ffffff';
+    const C = (n: string) => cssVar(`--gg-${n}`);
+    ctx.fillStyle = C('map-bg');
     ctx.fillRect(0, 0, W, H);
 
     const step = GRID_STEPS.find((s) => s * scale >= 45) ?? 1000;
@@ -79,22 +82,22 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     ctx.lineWidth = 1;
     for (let e = Math.ceil(tl.e / step) * step; e <= br.e; e += step) {
       const { x } = toPx(e, 0);
-      ctx.strokeStyle = Math.abs(e) < 1e-9 ? '#94a3b8' : '#e2e8f0';
+      ctx.strokeStyle = Math.abs(e) < 1e-9 ? C('axis') : C('grid');
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
       ctx.stroke();
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = C('label');
       ctx.fillText(`${+e.toFixed(1)} m`, x + 2, H - 4);
     }
     for (let n = Math.ceil(br.n / step) * step; n <= tl.n; n += step) {
       const { y } = toPx(0, n);
-      ctx.strokeStyle = Math.abs(n) < 1e-9 ? '#94a3b8' : '#e2e8f0';
+      ctx.strokeStyle = Math.abs(n) < 1e-9 ? C('axis') : C('grid');
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(W, y);
       ctx.stroke();
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = C('label');
       ctx.fillText(`${+n.toFixed(1)} m`, 2, y - 2);
     }
 
@@ -112,36 +115,36 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     };
     line(
       history.filter((r) => r.gnss.e != null && r.gnss.n != null).map((r) => ({ e: r.gnss.e!, n: r.gnss.n! })),
-      '#059669',
+      C('gnss'),
       2.5
     );
     line(
       history.filter((r) => r.vision?.e != null && r.vision?.n != null).map((r) => ({ e: r.vision!.e!, n: r.vision!.n! })),
-      '#0284c7',
+      C('vision'),
       2.5
     );
 
     const route = row.guidance ? lastRouteAt(data.routes ?? [], currentTimeSec) : undefined;
     if (route) {
       ctx.setLineDash([6, 4]);
-      line(route.waypoints, '#7c3aed', 1.5);
+      line(route.waypoints, C('route'), 1.5);
       ctx.setLineDash([]);
     }
 
     for (const k of data.keyframes) {
       if (k.t === null || k.t > currentTimeSec) continue;
       const q = toPx(k.e, k.n);
-      ctx.fillStyle = k.home ? '#0c4a6e' : '#0ea5e9';
+      ctx.fillStyle = k.home ? C('home-kf') : '#0ea5e9';
       ctx.fillRect(q.x - 2.5, q.y - 2.5, 5, 5);
     }
 
     const home = toPx(0, 0);
-    ctx.strokeStyle = '#334155';
+    ctx.strokeStyle = C('ink');
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(home.x, home.y, 9, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = '#334155';
+    ctx.fillStyle = C('ink');
     ctx.font = 'bold 10px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -160,8 +163,8 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
       ctx.lineWidth = 1.5;
       ctx.stroke();
     };
-    marker(row.gnss.e, row.gnss.n, '#059669');
-    marker(row.vision?.e ?? null, row.vision?.n ?? null, '#0284c7');
+    marker(row.gnss.e, row.gnss.n, C('gnss'));
+    marker(row.vision?.e ?? null, row.vision?.n ?? null, C('vision'));
 
     // GNSS position outside the view (a spoof that jumped away): pointer on the edge with its distance
     if (row.gnss.e != null && row.gnss.n != null) {
@@ -174,7 +177,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
         const k = Math.min(Math.abs((dx > 0 ? W - m - c.x : m - c.x) / (dx || 1e-9)), Math.abs((dy > 0 ? H - m - c.y : m - c.y) / (dy || 1e-9)));
         const ex = c.x + dx * k, ey = c.y + dy * k;
         const a = Math.atan2(dy, dx);
-        ctx.fillStyle = '#059669';
+        ctx.fillStyle = C('gnss');
         ctx.beginPath();
         ctx.moveTo(ex + 10 * Math.cos(a), ey + 10 * Math.sin(a));
         ctx.lineTo(ex + 9 * Math.cos(a + 2.5), ey + 9 * Math.sin(a + 2.5));
@@ -186,9 +189,9 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
         const tw = ctx.measureText(label).width;
         const lx = Math.min(Math.max(ex - tw / 2, 4), W - tw - 4);
         const ly = Math.min(Math.max(ey + (ey > H / 2 ? -16 : 22), 14), H - 6);
-        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fillStyle = C('tag-bg');
         ctx.fillRect(lx - 3, ly - 12, tw + 6, 16);
-        ctx.fillStyle = '#047857';
+        ctx.fillStyle = C('tag-ink');
         ctx.fillText(label, lx, ly);
       }
     }
@@ -196,7 +199,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
     // fused position (ring) and, while guiding, an arrow to the next waypoint
     if (row.fused) {
       const q = toPx(row.fused.e, row.fused.n);
-      ctx.strokeStyle = '#a21caf';
+      ctx.strokeStyle = C('fused');
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(q.x, q.y, 9, 0, Math.PI * 2);
@@ -204,7 +207,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
       if (row.guidance) {
         const w = toPx(row.guidance.waypoint.e, row.guidance.waypoint.n);
         const a = Math.atan2(w.y - q.y, w.x - q.x);
-        ctx.strokeStyle = '#7c3aed';
+        ctx.strokeStyle = C('route');
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(q.x, q.y);
@@ -215,7 +218,7 @@ export const TacticalMap: React.FC<TacticalMapProps> = ({ data, row, history, cu
         ctx.stroke();
       }
     }
-  }, [data, row, history, currentTimeSec, size, scale, extent]);   // focus is in extent
+  }, [data, row, history, currentTimeSec, size, scale, extent, theme]);   // focus is in extent
 
   const v = row.vision;
   const sep =

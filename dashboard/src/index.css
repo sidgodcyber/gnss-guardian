@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
-@theme {
-  /* Light theme: palette remapped (see make_light in the commit); classes stay as written. */
+html.light {
+  /* Light theme: Tailwind's palette remapped while <html> has the class "light" (the toggle);
+     without it the page uses the default (dark) palette. Classes stay as written. */
   --color-slate-50: oklch(12.9% 0.042 264.695);
   --color-slate-100: oklch(20.8% 0.042 265.755);
   --color-slate-200: oklch(27.9% 0.041 260.031);
@@ -112,8 +113,8 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: var(--color-slate-950);
+    color: var(--color-slate-100);
     overflow-x: hidden;
   }
 
@@ -124,18 +125,54 @@
   }
 }
 
-/* Subtle scrollbars (light theme) */
+/* Subtle scrollbars (follow the theme) */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: var(--color-slate-950);
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--color-slate-800);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--color-slate-700);
+}
+
+/* Colours drawn by canvas / SVG code (tactical map, trust rings, score timeline), per theme. */
+:root {
+  --gg-map-bg: #090d16;
+  --gg-grid: #152033;
+  --gg-axis: #334155;
+  --gg-label: #64748b;
+  --gg-ink: #e2e8f0;
+  --gg-home-kf: #e0f2fe;
+  --gg-gnss: #10b981;
+  --gg-vision: #0ea5e9;
+  --gg-route: #a78bfa;
+  --gg-fused: #f5d0fe;
+  --gg-tag-bg: rgba(2, 6, 23, 0.85);
+  --gg-tag-ink: #34d399;
+  --gg-ring-track: #1e293b;
+  --gg-cursor: #e2e8f0;
+  --gg-spoof-line: #a78bfa;
+}
+html.light {
+  --gg-map-bg: #ffffff;
+  --gg-grid: #e2e8f0;
+  --gg-axis: #94a3b8;
+  --gg-label: #64748b;
+  --gg-ink: #334155;
+  --gg-home-kf: #0c4a6e;
+  --gg-gnss: #059669;
+  --gg-vision: #0284c7;
+  --gg-route: #7c3aed;
+  --gg-fused: #a21caf;
+  --gg-tag-bg: rgba(255, 255, 255, 0.92);
+  --gg-tag-ink: #047857;
+  --gg-ring-track: #e2e8f0;
+  --gg-cursor: #334155;
+  --gg-spoof-line: #7c3aed;
 }

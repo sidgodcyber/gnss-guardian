@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DashboardFile, Row } from '../types/gnssGuardian';
 import { fmt, frameAt } from '../services/session';
+import { WebcamVO } from './WebcamVO';
 
 interface Props {
   data: DashboardFile;
@@ -99,6 +100,8 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [clip, setClip] = useState<string | null>(null);
+  // laptop webcam: browser VO prototype (?webcam=1 opens it at load)
+  const [cam, setCam] = useState(() => new URLSearchParams(window.location.search).get('webcam') === '1');
   useEffect(() => {
     let live = true;
     probeClip().then((url) => live && setClip(url));
@@ -133,13 +136,26 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
   return (
     <div className="flex flex-col bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden h-full shadow-xl">
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 bg-slate-950/90 border-b border-slate-800">
-        <span className="text-xs font-bold uppercase tracking-wider text-slate-200">Down-Cam VIO</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-200">Down-Cam VIO</span>
+          <button
+            onClick={() => setCam((c) => !c)}
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
+              cam ? 'bg-red-700 text-white border-red-600' : 'bg-emerald-600 text-white border-emerald-500'
+            }`}
+            title={cam ? 'Stop the webcam' : 'Open the laptop webcam: corners tracked, keyframes saved in this browser'}
+          >
+            {cam ? 'Stop camera' : 'Camera'}
+          </button>
+        </div>
         <span
           className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
             navByVision ? 'bg-sky-500/25 text-sky-300 border-sky-400' : 'bg-slate-800 text-slate-400 border-slate-700'
           }`}
         >
-          {navByVision
+          {cam
+            ? 'webcam: browser prototype'
+            : navByVision
             ? row.fused?.source === 'vision_stale'
               ? 'camera track lost: position held'
               : 'position from vision (dead reckoning)'
@@ -150,6 +166,11 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
       </div>
 
       <div className="relative flex-1 min-h-0 bg-black">
+        {cam && (
+          <div className="absolute inset-0 z-10">
+            <WebcamVO />
+          </div>
+        )}
         {clip ? (
           <ClipFilm src={clip} />
         ) : liveStreamUrl ? (
