@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.log
 .env*
+
+# Down-cam clip shown in the dashboard (local only: may show people; never committed)
+public/downcam.*

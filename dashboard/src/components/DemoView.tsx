@@ -3,7 +3,7 @@ import { DashboardFile, Detector, Row, TrustScore } from '../types/gnssGuardian'
 import { fmt, fmtTime, lastTransitionAt, stateLabel } from '../services/session';
 import { ReplayControls, ScoreStrip, featureValue } from './DetectionIndicatorsPanel';
 import { TacticalMap } from './TacticalMap';
-import { DownCamView } from './DownCamView';
+import { DownCamView, probeClip } from './DownCamView';
 
 // Single-screen view for judging: everything that matters on one 1920x1080 (or 1366x768) screen.
 // Left: GNSS Trust, Nav confidence (only while the camera carries the position), state, AI.
@@ -217,7 +217,11 @@ const FiringIndicators: React.FC<{ data: DashboardFile; row: Row }> = ({ data, r
 
 export const DemoView: React.FC<Props> = (p) => {
   const { data, row, history, currentTimeSec, isLive, stale, videoUrl, liveStreamUrl } = p;
-  const hasCamera = !!videoUrl || (isLive && data.timeline.some((r) => r.vision));
+  const [clip, setClip] = useState(false);
+  useEffect(() => {
+    probeClip().then((url) => setClip(!!url));
+  }, []);
+  const hasCamera = clip || !!videoUrl || (isLive && data.timeline.some((r) => r.vision));
   const h = data.config.hysteresis;
   const short = useShort();
   return (

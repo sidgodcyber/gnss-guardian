@@ -14,9 +14,39 @@ interface Props {
 
 const DRIFT_S = 0.3;
 
+// Optional local clip: dashboard/public/downcam.webm (or .mp4), git-ignored and never published. When
+// present it plays on loop in this panel instead of the session video / live stream; ?downcam=off turns it
+// off. It is not synchronised with the session: the VIO numbers next to it come from the session's own
+// camera track. WebM (VP8) plays everywhere; phone MP4s (H.264) may not.
+const CLIP_URLS = ['/downcam.webm', '/downcam.mp4'];
+let clipProbe: Promise<string | null> | null = null;
+export function probeClip(): Promise<string | null> {
+  if (new URLSearchParams(window.location.search).get('downcam') === 'off') return Promise.resolve(null);
+  clipProbe ??= (async () => {
+    for (const url of CLIP_URLS) {
+      try {
+        const r = await fetch(url, { method: 'HEAD' });
+        if (r.ok && (r.headers.get('content-type') ?? '').startsWith('video/')) return url;
+      } catch {
+        /* not served */
+      }
+    }
+    return null;
+  })();
+  return clipProbe;
+}
+
 export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUrl, currentTimeSec, isPlaying, playbackSpeed }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [clip, setClip] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    probeClip().then((url) => live && setClip(url));
+    return () => {
+      live = false;
+    };
+  }, []);
   const fps = data.meta.video_fps ?? 30;
   const frame = frameAt(data.timeline, currentTimeSec);
   const target = frame === null ? null : frame / fps;
@@ -61,7 +91,16 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
       </div>
 
       <div className="relative flex-1 min-h-0 bg-black">
-        {liveStreamUrl ? (
+        {clip ? (
+          <video
+            src={clip}
+            muted
+            autoPlay
+            loop
+            playsInline
+            className="absolute inset-0 w-full h-full object-contain"
+          />
+        ) : liveStreamUrl ? (
           <img
             src={liveStreamUrl}
             alt="live camera overlay from the Pi"
@@ -86,7 +125,12 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
             No video in this session (replay was run without --video, or the folder has no dashboard_video.webm).
           </div>
         )}
-        {videoUrl && frame === null && (
+        {clip && (
+          <div className="absolute bottom-3 left-3 px-2 py-1 bg-slate-950/85 border border-slate-800 rounded text-[10px] font-mono text-slate-400">
+            camera clip (looped, not synced to this session)
+          </div>
+        )}
+        {!clip && videoUrl && frame === null && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-300 bg-black/70">
             before the first camera frame
           </div>
@@ -110,7 +154,7 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
             {v.flag && <div className="text-amber-300">{v.flag}</div>}
           </div>
         )}
-        {videoUrl && frame !== null && (
+        {!clip && videoUrl && frame !== null && (
           <div className="absolute bottom-3 right-3 px-2 py-1 bg-slate-950/85 border border-slate-800 rounded text-[10px] font-mono text-slate-400">
             frame {Math.round(frame)} · {fps} fps
           </div>
