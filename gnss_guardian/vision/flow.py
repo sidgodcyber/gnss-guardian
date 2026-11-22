@@ -46,6 +46,7 @@ class FlowTracker:
         self._skipped = 0
         self._m_frame: np.ndarray | None = None      # last per-frame motion (3x3, processing pixels)
         self._orb = None
+        self.n_corners = 0              # corners found by the last Shi-Tomasi detection (display only)
         self.last_pairs: tuple[np.ndarray, np.ndarray] | None = None   # inlier (previous, current) points,
                                                                        # full-resolution pixels (overlay)
 
@@ -60,6 +61,7 @@ class FlowTracker:
         v = self.v
         pts = cv2.goodFeaturesToTrack(img, maxCorners=v["max_corners"], qualityLevel=v["corner_quality"],
                                       minDistance=max(2, int(v["corner_min_dist_px"] * self.scale)), blockSize=7)
+        self.n_corners = 0 if pts is None else len(pts)
         self._fresh = True
         return pts
 

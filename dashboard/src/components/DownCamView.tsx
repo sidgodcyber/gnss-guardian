@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DashboardFile, Row } from '../types/gnssGuardian';
 import { fmt, frameAt } from '../services/session';
+import { cameraOffline } from './VisionPipeline';
 
 interface Props {
   data: DashboardFile;
@@ -37,6 +38,9 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
 
   useEffect(() => setVideoError(null), [videoUrl]);
 
+  const offline = cameraOffline(data, !!liveStreamUrl);
+  // the Pi's overlay (live stream, or its recording) draws the vision on the frame: say what is what
+  const overlay = !offline && (!!liveStreamUrl || (!!videoUrl && data.meta.video_kind === 'overlay'));
   const v = row.vision;
   const speed = v?.v_e != null && v?.v_n != null ? Math.hypot(v.v_e, v.v_n) : null;
   const navByVision = row.fused?.source === 'vision' || row.fused?.source === 'vision_stale';
@@ -89,6 +93,19 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
         {videoUrl && frame === null && (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-300 bg-black/70">
             before the first camera frame
+          </div>
+        )}
+        {offline && (
+          <div className="absolute top-3 right-3 px-2 py-1 rounded bg-slate-950/90 border border-slate-700 text-[11px] text-slate-300">
+            camera offline · {offline}
+          </div>
+        )}
+        {overlay && (
+          <div className="absolute bottom-3 left-3 px-2 py-1 rounded bg-slate-950/85 border border-slate-800 text-[10px] font-mono text-slate-300 flex flex-wrap gap-x-3 gap-y-0.5 max-w-[70%]">
+            <span><span className="text-emerald-400">●</span> tracked points</span>
+            <span><span className="text-amber-300">—</span> movement</span>
+            <span><span className="text-slate-100">▪</span> keyframes (inset map)</span>
+            <span><span className="text-emerald-400">▭</span> HOME MATCH</span>
           </div>
         )}
         {videoError && (

@@ -4,6 +4,9 @@ import { fmt, fmtTime, lastTransitionAt, stateLabel } from '../services/session'
 import { ReplayControls, ScoreStrip, featureValue } from './DetectionIndicatorsPanel';
 import { TacticalMap } from './TacticalMap';
 import { DownCamView } from './DownCamView';
+import { VisionPipeline } from './VisionPipeline';
+
+const PIPE_KEY = 'gnss-guardian.vision-pipeline';
 
 // Single-screen view for judging: everything that matters on one 1920x1080 (or 1366x768) screen.
 // Left: GNSS Trust, Nav confidence (only while the camera carries the position), state, AI.
@@ -220,6 +223,22 @@ export const DemoView: React.FC<Props> = (p) => {
   const hasCamera = !!videoUrl || (isLive && data.timeline.some((r) => r.vision));
   const h = data.config.hysteresis;
   const short = useShort();
+  const [pipe, setPipe] = useState(() => {
+    try {
+      return window.localStorage.getItem(PIPE_KEY) !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const togglePipe = () =>
+    setPipe((x) => {
+      try {
+        window.localStorage.setItem(PIPE_KEY, x ? 'off' : 'on');
+      } catch {
+        /* not remembered */
+      }
+      return !x;
+    });
   return (
     <div className={`flex-1 min-h-0 flex flex-col gap-2 p-2 ${stale ? 'opacity-60 grayscale' : ''}`}>
       <div
@@ -259,6 +278,12 @@ export const DemoView: React.FC<Props> = (p) => {
         )}
       </div>
 
+      {pipe && (
+        <div className="shrink-0">
+          <VisionPipeline data={data} row={row} isLive={isLive} compact />
+        </div>
+      )}
+
       <div className={`shrink-0 bg-slate-900/80 rounded-xl border border-slate-800 px-3 ${short ? 'py-1.5 gap-1' : 'py-2 gap-1.5'} flex flex-col`}>
         {isLive ? (
           <div className="flex items-center gap-3 text-xs font-mono text-slate-400">
@@ -284,6 +309,12 @@ export const DemoView: React.FC<Props> = (p) => {
           <span className="text-orange-400">— jamming</span>
           <span className="text-violet-400">— spoofing</span>
           <span>dashed: SUSPECT {h.suspect_on} · ALARM {h.alarm_on}</span>
+          <button onClick={togglePipe}
+            className={`ml-auto px-2 py-0.5 rounded border font-sans font-semibold ${
+              pipe ? 'border-sky-500/60 bg-sky-950/50 text-sky-300' : 'border-slate-700 text-slate-400'
+            }`}>
+            Vision pipeline {pipe ? 'on' : 'off'}
+          </button>
         </div>
         <FiringIndicators data={data} row={row} />
       </div>

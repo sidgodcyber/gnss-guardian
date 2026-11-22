@@ -9,6 +9,7 @@ import { TacticalMap } from './components/TacticalMap';
 import { DownCamView } from './components/DownCamView';
 import { DetectionIndicatorsPanel } from './components/DetectionIndicatorsPanel';
 import { SensorFusionView } from './components/SensorFusionView';
+import { VisionPipeline } from './components/VisionPipeline';
 import { IncidentLogView } from './components/IncidentLogView';
 
 type Tab = 'replay' | 'logs';
@@ -294,6 +295,8 @@ export default function App() {
                     />
                   </div>
                 </div>
+
+                <VisionPipeline data={session.data} row={row} isLive={isLive} />
 
                 <SensorFusionView row={row} />
               </div>

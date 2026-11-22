@@ -275,6 +275,8 @@ class VisionNav:
                     "mode": "gnss_anchored" if self._trusted else ("dead_reckoning" if pos else "waiting_for_home"),
                     "quality": round(self.vo.last["quality"], 2), "n_inliers": self.vo.last["n_inliers"],
                     "flag": self.vo.last["flag"],
+                    "n_tracked": self.vo.last["n_tracked"], "n_corners": self.vo.last["n_corners"],
+                    "shift_px": self.vo.last["shift_px"], "orb": self.vo.last["orb"],
                     "v_e": None if vel is None else round(vel[1], 2), "v_n": None if vel is None else round(vel[2], 2),
                     "since_anchor_m": None if since is None else round(since, 1),
                     "keyframes": len(self.map.keyframes), "home_keyframe": self.map.home is not None,

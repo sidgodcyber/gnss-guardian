@@ -41,7 +41,8 @@ class VisualOdometry:
         self._t_ref: float | None = None           # time of the flow's reference frame
         self._last_good_t: float | None = None
         self._vbody = (0.0, 0.0)                    # last good body velocity (right, forward) m/s
-        self.last = {"quality": 0.0, "n_inliers": 0, "n_tracked": 0, "flag": "start"}
+        self.last = {"quality": 0.0, "n_inliers": 0, "n_tracked": 0, "flag": "start", "n_corners": 0,
+                     "shift_px": None, "orb": False}
 
     def step(self, t: float, gray) -> dict:
         res = self.flow.step(gray)
@@ -82,8 +83,12 @@ class VisualOdometry:
         while self.hist and self.hist[0][0] < t - self.keep_s:
             self.hist.popleft()
         self._last_t = t
+        shift = None                        # image motion per frame, full-resolution pixels (display only)
+        if res is not None and res.ok and res.m is not None:
+            shift = round(math.hypot(float(res.m[0, 2]), float(res.m[1, 2])) / max(res.frames, 1), 2)
         self.last = {"quality": q, "n_inliers": res.n_inliers if res else 0,
-                     "n_tracked": res.n_tracked if res else 0, "flag": flag}
+                     "n_tracked": res.n_tracked if res else 0, "flag": flag, "n_corners": self.flow.n_corners,
+                     "shift_px": shift, "orb": bool(res.orb) if res else False}
         return self.last
 
     def at(self, t: float) -> tuple[float, float] | None:

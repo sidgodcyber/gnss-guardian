@@ -32,7 +32,10 @@ FEATURES = ("drop_frac", "mean_drop_db", "lost_frac", "hdop_ratio", "fix_lost", 
             "time_jump_s", "alt_rate_mps", "cn0_std", "newcomer_frac", "vision_diff_mps", "vision_drift_mps",
             "vision_pos_drift_m", "sky_err_deg", "sky_impossible")
 VISION = ("mode", "e", "n", "heading", "aligned", "quality", "n_inliers", "flag", "v_e", "v_n", "keyframes",
-          "home_dist_m")
+          "home_dist_m",
+          # vision pipeline panel (read-only): corners, tracks, pixel shift, ORB fallback, distance since the
+          # last trusted fix, last keyframe / home match
+          "n_corners", "n_tracked", "shift_px", "orb", "since_anchor_m", "last_match", "home_confirmed")
 
 
 def indicator_config(cfg: dict) -> dict:
@@ -71,7 +74,17 @@ def indicator_config(cfg: dict) -> dict:
         ]},
         "hysteresis": {k: h[k] for k in ("suspect_on", "suspect_off", "suspect_hold_s", "alarm_on", "alarm_k",
                                          "alarm_immediate", "alarm_off", "alarm_hold_s", "min_alarm_s")},
+        "camera": _camera(cfg),
     }
+
+
+def _camera(cfg: dict) -> dict:
+    """Pixels-to-metres inputs for the vision pipeline panel: lens height and focal length (calibrated, or
+    from the field of view) at the camera width."""
+    from gnss_guardian.vision.geometry import focal_px
+    c = cfg["camera"]
+    return {"height_m": c["height_m"], "focal_px": round(focal_px(cfg), 1), "width_px": c["width"],
+            "calibrated": bool(c.get("focal_px"))}
 
 
 def _host_t(v: dict) -> float | None:
@@ -273,13 +286,14 @@ def export_dashboard(session: str | Path, cfg: dict, video: str | Path | None = 
             "node_id": info.get("node_id"), "start_t_gnss": epochs[0]["t_gnss"] if epochs else None,
             "duration_s": timeline[-1]["t"] if timeline else 0, "epochs": len(epochs),
             "home_set": info.get("home") is not None, "state_source": STATE_SOURCE,
-            "video": None, "video_fps": None, "reference_track": None}
+            "video": None, "video_fps": None, "video_kind": None, "reference_track": None}
 
     if video:
         video = Path(video)
         times = _frame_times(video, frames_csv, video_start)
         meta["video_fps"] = _transcode(video, times, session / "dashboard_video.webm")
         meta["video"] = "dashboard_video.webm"
+        meta["video_kind"] = "overlay" if video.stem.startswith("overlay") else "camera"   # live --overlay-record
         i = 0
         for row in timeline:
             target = t0 + row["t"]

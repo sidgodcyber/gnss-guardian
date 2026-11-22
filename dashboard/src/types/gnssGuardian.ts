@@ -34,6 +34,14 @@ export interface VisionRow {
   v_n: number | null;
   keyframes: number;
   home_dist_m: number | null;
+  // vision pipeline panel (read-only; absent in sessions exported before it)
+  n_corners?: number;               // Shi-Tomasi corners at the last detection
+  n_tracked?: number;               // points tracked by Lucas-Kanade into this frame
+  shift_px?: number | null;         // image motion per frame, pixels
+  orb?: boolean;                    // this frame was matched by the ORB fallback
+  since_anchor_m?: number | null;   // camera distance since the last trusted fix
+  last_match?: { t: number; kf: number; inliers: number; correction_m: number } | null;
+  home_confirmed?: { t: number; offset_m: number; inliers: number } | null;
 }
 
 export type Cause = 'jamming' | 'spoofing';
@@ -226,7 +234,15 @@ export interface IndicatorDef {
   weight: number;
 }
 
+export interface CameraConfig {
+  height_m: number;
+  focal_px: number;
+  width_px: number;
+  calibrated: boolean;
+}
+
 export interface DashboardConfig {
+  camera?: CameraConfig;
   jamming: { combine: string; indicators: IndicatorDef[] };
   spoofing: { combine: string; indicators: IndicatorDef[] };
   hysteresis: {
@@ -254,6 +270,7 @@ export interface DashboardMeta {
   state_source: string;
   video: string | null;
   video_fps: number | null;
+  video_kind?: 'overlay' | 'camera' | null;   // overlay = the Pi's annotated stream, recorded in live mode
   reference_track: null;
 }
 
