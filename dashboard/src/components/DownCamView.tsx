@@ -36,6 +36,65 @@ export function probeClip(): Promise<string | null> {
   return clipProbe;
 }
 
+// The clip as rough film: played slowly, sampled frame by frame at a low rate onto a low-resolution canvas
+// (cover-cropped to fill the panel), with grain, a little desaturation and contrast, and the odd scratch.
+const FILM = { speed: 0.5, fps: 8, pixel: 3, grain: 70 };
+
+const ClipFilm: React.FC<{ src: string }> = ({ src }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d', { willReadFrequently: true });
+    if (!video || !canvas || !ctx) return;
+    video.playbackRate = FILM.speed;
+    video.play().catch(() => undefined);
+
+    const draw = () => {
+      const W = Math.max(1, Math.round(canvas.clientWidth / FILM.pixel));
+      const H = Math.max(1, Math.round(canvas.clientHeight / FILM.pixel));
+      if (canvas.width !== W || canvas.height !== H) {
+        canvas.width = W;
+        canvas.height = H;
+      }
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) return;
+      if (video.playbackRate !== FILM.speed) video.playbackRate = FILM.speed;
+      const s = Math.max(W / vw, H / vh);                    // cover: fill the panel, crop the overflow
+      const sw = W / s, sh = H / s;
+      ctx.filter = 'grayscale(0.35) contrast(1.3) brightness(0.92) sepia(0.12)';
+      ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, W, H);
+      ctx.filter = 'none';
+      const img = ctx.getImageData(0, 0, W, H);
+      const d = img.data;
+      const flicker = (Math.random() - 0.5) * 18;
+      for (let i = 0; i < d.length; i += 4) {
+        const n = (Math.random() - 0.5) * FILM.grain + flicker;
+        d[i] += n;
+        d[i + 1] += n;
+        d[i + 2] += n;
+      }
+      ctx.putImageData(img, 0, 0);
+      if (Math.random() < 0.35) {                            // a scratch on some frames
+        ctx.fillStyle = `rgba(255,255,255,${0.15 + Math.random() * 0.25})`;
+        ctx.fillRect(Math.floor(Math.random() * W), 0, 1, H);
+      }
+    };
+    const id = window.setInterval(draw, 1000 / FILM.fps);
+    return () => window.clearInterval(id);
+  }, [src]);
+
+  return (
+    <>
+      <video ref={videoRef} src={src} muted autoPlay loop playsInline aria-hidden
+        className="absolute w-px h-px opacity-0 pointer-events-none" />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ imageRendering: 'pixelated' }} />
+    </>
+  );
+};
+
 export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUrl, currentTimeSec, isPlaying, playbackSpeed }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
@@ -92,14 +151,7 @@ export const DownCamView: React.FC<Props> = ({ data, row, videoUrl, liveStreamUr
 
       <div className="relative flex-1 min-h-0 bg-black">
         {clip ? (
-          <video
-            src={clip}
-            muted
-            autoPlay
-            loop
-            playsInline
-            className="absolute inset-0 w-full h-full object-contain"
-          />
+          <ClipFilm src={clip} />
         ) : liveStreamUrl ? (
           <img
             src={liveStreamUrl}
