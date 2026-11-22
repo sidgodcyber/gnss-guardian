@@ -160,6 +160,21 @@ function cameraError(e: unknown): string {
   return `The camera did not start: ${e instanceof Error ? e.message : String(e)}`;
 }
 
+// Virtual or infrared cameras (DroidCam without a phone, OBS, Windows Hello IR) give blank frames: avoid them
+// when nothing has been chosen yet.
+const VIRTUAL = /droidcam|virtual|obs|snap camera|manycam|\bir\b|infrared|hello/i;
+const CAM_KEY = 'gnss-guardian.camera';
+const BLANK_STD = 3;              // grey-level spread below this: an empty frame
+const BLANK_FRAMES = 30;          // ... for this many processed frames (~2 s): say so
+
+function savedCamera(): string | null {
+  try {
+    return window.localStorage.getItem(CAM_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export const WebcamVO: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewRef = useRef<HTMLCanvasElement | null>(null);
@@ -169,6 +184,19 @@ export const WebcamVO: React.FC = () => {
   const [keys, setKeys] = useState<Key[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);                     // Retry re-runs the camera effect
+  const [deviceId, setDeviceId] = useState<string | null>(savedCamera);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [activeLabel, setActiveLabel] = useState('');
+  const [blank, setBlank] = useState(false);
+  const chooseCamera = (id: string) => {
+    try {
+      window.localStorage.setItem(CAM_KEY, id);
+    } catch {
+      /* not remembered */
+    }
+    setBlank(false);
+    setDeviceId(id);
+  };
   const [stats, setStats] = useState({ tracked: 0, inliers: 0, flow: 0, fps: 0 });
   const [match, setMatch] = useState<{ id: number; score: number } | null>(null);
   const saveNow = useRef(false);
@@ -208,6 +236,7 @@ export const WebcamVO: React.FC = () => {
     let tracks: Track[] = [];
     const path: Pt[] = [{ x: 0, y: 0 }];
     let pred = { x: 0, y: 0 };                                 // last median flow: the motion prior
+    let blankRun = 0;
     let since = 0, lastProc = 0, frames = 0, fpsT = performance.now(), lastMatch = 0;
 
     const saveKey = (g: Uint8ClampedArray) => {
@@ -238,6 +267,13 @@ export const WebcamVO: React.FC = () => {
       wctx.drawImage(v, (v.videoWidth - sw) / 2, (v.videoHeight - sh) / 2, sw, sh, 0, 0, W, H);
       const g = new Uint8ClampedArray(W * H);
       toGray(wctx.getImageData(0, 0, W, H), g);
+      let sum = 0, sum2 = 0;
+      for (let i = 0; i < g.length; i += 37) { sum += g[i]; sum2 += g[i] * g[i]; }
+      const cnt = Math.ceil(g.length / 37);
+      const std = Math.sqrt(Math.max(0, sum2 / cnt - (sum / cnt) ** 2));
+      blankRun = std < BLANK_STD ? blankRun + 1 : 0;
+      if (blankRun === BLANK_FRAMES) setBlank(true);
+      if (blankRun === 0) setBlank(false);
 
       // track, reject outliers against the median flow, refill corners
       if (prev) {
@@ -326,15 +362,36 @@ export const WebcamVO: React.FC = () => {
         if (!navigator.mediaDevices?.getUserMedia)
           throw new Error('this page has no camera access: open it as http://127.0.0.1:3000 or localhost (or https)');
         setError(null);
+        const pick = deviceId ? { deviceId: { exact: deviceId } } : {};
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+          stream = await navigator.mediaDevices.getUserMedia({ video: { ...pick, width: 640, height: 480 }, audio: false });
         } catch (first) {
           if (first instanceof DOMException && first.name === 'NotAllowedError') throw first;
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });   // any resolution
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: deviceId ? pick : true, audio: false });   // any resolution
+          } catch (second) {
+            if (!deviceId) throw second;
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });   // saved camera gone
+          }
         }
         if (stop) {
           stream.getTracks().forEach((t) => t.stop());
           return;
+        }
+        // the camera list (labels are known once permission is given); prefer a real camera the first time
+        const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+        const track = stream.getVideoTracks()[0];
+        const cur = track?.getSettings().deviceId ?? '';
+        setDevices(cams);
+        setActiveLabel(track?.label ?? '');
+        if (!deviceId) {
+          const real = cams.find((d) => !VIRTUAL.test(d.label));
+          if (real && real.deviceId && real.deviceId !== cur && VIRTUAL.test(track?.label ?? '')) {
+            stream.getTracks().forEach((t) => t.stop());
+            stream = null;
+            setDeviceId(real.deviceId);                                   // re-runs this effect on it
+            return;
+          }
         }
         const v = videoRef.current!;
         v.srcObject = stream;
@@ -349,7 +406,7 @@ export const WebcamVO: React.FC = () => {
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [attempt]);
+  }, [attempt, deviceId]);
 
   const download = useCallback((k: Key) => {
     const a = document.createElement('a');
@@ -376,6 +433,19 @@ export const WebcamVO: React.FC = () => {
           <div className="max-w-xs text-xs leading-relaxed text-slate-300">{error}</div>
           <button onClick={() => setAttempt((a) => a + 1)}
             className="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs font-semibold">Retry</button>
+        </div>
+      )}
+      {blank && !error && (
+        <div className="absolute inset-x-3 top-1/3 z-10 p-3 rounded-lg bg-slate-950/90 border border-amber-500/60 text-xs text-amber-200 text-center space-y-2">
+          <div className="font-semibold">"{activeLabel || 'this camera'}" sends empty frames</div>
+          <div className="text-slate-300">A virtual camera (DroidCam without the phone, OBS) or an IR camera does this. Choose another camera:</div>
+          <select value="" onChange={(e) => e.target.value && chooseCamera(e.target.value)}
+            className="bg-slate-900 border border-slate-700 text-slate-200 rounded px-2 py-1">
+            <option value="">choose a camera…</option>
+            {devices.map((d, i) => (
+              <option key={d.deviceId || i} value={d.deviceId}>{d.label || `camera ${i + 1}`}</option>
+            ))}
+          </select>
         </div>
       )}
       <div className="absolute top-3 left-3 p-2.5 bg-slate-950/85 border border-slate-800 rounded-lg text-[11px] font-mono text-slate-300 space-y-1">
@@ -408,8 +478,20 @@ export const WebcamVO: React.FC = () => {
             className="px-2 py-1 rounded bg-slate-800 text-slate-200 border border-slate-700 disabled:opacity-40">Download all</button>
           <button onClick={clear} disabled={!keys.length}
             className="px-2 py-1 rounded bg-slate-800 text-slate-200 border border-slate-700 disabled:opacity-40">Clear</button>
-          <span className="ml-auto px-1.5 py-0.5 rounded bg-slate-950/85 text-slate-400 font-mono">
-            browser prototype · frames stay in this browser
+          {devices.length > 1 && (
+            <select
+              value={devices.find((d) => d.label === activeLabel)?.deviceId ?? ''}
+              onChange={(e) => e.target.value && chooseCamera(e.target.value)}
+              aria-label="Camera"
+              className="max-w-36 bg-slate-900 border border-slate-700 text-slate-200 rounded px-1.5 py-1"
+            >
+              {devices.map((d, i) => (
+                <option key={d.deviceId || i} value={d.deviceId}>{d.label || `camera ${i + 1}`}</option>
+              ))}
+            </select>
+          )}
+          <span className="ml-auto px-1.5 py-0.5 rounded bg-slate-950/85 text-slate-400 font-mono" title="frames stay in this browser">
+            browser prototype
           </span>
         </div>
       </div>
